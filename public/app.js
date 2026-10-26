@@ -112,7 +112,13 @@ const act = (action) => {
 
 async function loadRooms() {
   if (!S.user || isDemo() || S.view !== 'lobby') return;
-  try { S.rooms = (await api('/api/rooms')).rooms; if (S.view === 'lobby' && !S.modal) render(); } catch { /* sonra */ }
+  try {
+  S.rooms = (await api('/api/rooms')).rooms;
+  if (S.view === 'lobby' && !S.modal) {
+    const list = document.getElementById('roomList');
+    if (list) list.innerHTML = renderRoomsList();
+  }
+} catch { /* sonra */ }
 }
 setInterval(loadRooms, 5000);
 
