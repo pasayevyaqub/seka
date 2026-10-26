@@ -1,29 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { score3, handScore, isJackpot } from '../server/game/cards.js';
-import { Round, GameError } from '../server/game/engine.js';
+import { Round, GameError, TIMING } from '../server/game/engine.js';
 
 // 'TS' -> {r:'T', s:'S'}, '10H' -> {r:'10', s:'H'}
 const c = (str) => ({ r: str.slice(0, -1), s: str.slice(-1) });
 const h = (str) => str.split(' ').map(c);
-
-test('xal hesablama', () => {
-  assert.equal(score3(h('7S 7H 7D')), 21);
-  assert.equal(score3(h('DS DH DC')), 30);
-  assert.equal(score3(h('DS KS TS')), 31);
-  assert.equal(score3(h('6H 7H 8H')), 21);
-  assert.equal(score3(h('TS 9S 7H')), 20);
-  assert.equal(score3(h('TS 9H 7D')), 11);
-  assert.equal(score3(h('10C VC 6D')), 20);
-  assert.equal(handScore(h('TS KS 6H 10S')), 31); // 4 kartdan ən yaxşı 3
-});
-
-test('cəkpot', () => {
-  assert.ok(isJackpot(h('6S 6H 6D')));
-  assert.ok(isJackpot(h('TS TH TD')));
-  assert.ok(isJackpot(h('TS 7H TD TC')));
-  assert.ok(!isJackpot(h('7S 7H 7D')));
-});
 
 const players = (n, bal = 1000) => Array.from({ length: n }, (_, i) => ({ id: i + 1, name: `P${i + 1}`, balance: bal }));
 const dealer = (map) => (handNo, ids) => {
@@ -32,258 +14,387 @@ const dealer = (map) => (handNo, ids) => {
   ids.forEach((id) => { out[id] = h(hands[id]); });
   return out;
 };
-const sumDeltas = (effects) => effects.reduce((s, e) => s + e.delta, 0);
-const balances = (r) => [...r.players.values()].map((p) => p.balance);
+const total = (r) => [...r.players.values()].reduce((a, p) => a + p.balance, 0);
+const mk = (n, hands, settings = {}, bal = 1000) => new Round({ players: players(n, bal), settings: { ante: 10, minBet: 10, ...settings }, now: 0, dealer: dealer(hands) });
+const flowsOf = (r) => Object.fromEntries(r.result.flows.map((f) => [`${f.from}>${f.to}`, f.cents]));
 
-test('adi raund: oyun haqqı, xod, baxışma, qalib', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } }),
-  });
+// ---------------- xal ----------------
+test('xal hesablama', () => {
+  assert.equal(score3(h('7S 7H 7D')), 21);
+  assert.equal(score3(h('DS DH DC')), 30);
+  assert.equal(score3(h('DS KS TS')), 31);
+  assert.equal(score3(h('6H 7H 8H')), 21);
+  assert.equal(score3(h('TS 9S 7H')), 20);
+  assert.equal(score3(h('TS 9H 7D')), 11);
+  assert.equal(handScore(h('10C VC 6D')), 20);
+});
+
+test('cəkpot kombinasiyaları', () => {
+  assert.ok(isJackpot(h('6S 6H 6D')));
+  assert.ok(isJackpot(h('TS TH TD')));
+  assert.ok(!isJackpot(h('7S 7H 7D')));
+  assert.ok(!isJackpot(h('TS TH 6D')));
+});
+
+// ---------------- əsas axın ----------------
+test('adi raund: oyun haqqı, xod, baxışma, qalib, kartlar nəticədə açılır', () => {
+  const r = mk(3, { 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } });
   assert.equal(r.pot, 30);
   assert.equal(r.turn, 1);
   r.act(1, { type: 'xod', amount: 20 }, 0);
-  assert.throws(() => r.act(1, { type: 'xod', amount: 20 }, 0), GameError); // növbə onda deyil
+  assert.throws(() => r.act(1, { type: 'xod', amount: 20 }, 0), GameError);
   assert.throws(() => r.act(2, { type: 'xod', amount: 10 }, 0), /Minimum/);
+  assert.throws(() => r.act(2, { type: 'baxis' }, 0), /ilk xod/);
   r.act(2, { type: 'xod', amount: 20 }, 0);
   r.act(3, { type: 'xod', amount: 20 }, 0);
-  // birinci dövr bitdi, P1 sağındakı (P3) ilə baxışır
-  r.act(1, { type: 'baxis' }, 0);
+  r.act(1, { type: 'baxis' }, 0); // P1 → P3
   assert.equal(r.ps[3].status, 'lost');
-  assert.equal(r.turn, 2);
-  r.act(2, { type: 'baxis' }, 0); // P2 vs P1 → P1 udur
+  // baxışan ikisi bir-birinin kartını görür, P2 görmür
+  assert.ok(r.viewFor(1).players.find((p) => p.id === 3).cards);
+  assert.equal(r.viewFor(2).players.find((p) => p.id === 3).cards, null);
+  assert.equal(r.viewFor(2).players.find((p) => p.id === 1).cards, null);
+  r.act(2, { type: 'baxis' }, 0); // P2 → P1
   assert.equal(r.phase, 'finished');
   assert.deepEqual(r.result.winners, [1]);
-  assert.equal(sumDeltas(r.effects), 0);
-  assert.equal(balances(r).reduce((a, b) => a + b), 3000);
+  assert.equal(r.result.how, 'compare');
+  assert.deepEqual(r.result.shown.map((s) => [s.id, s.score]), [[1, 31], [2, 15]]);
+  // izləyici (raundda olmayan) də nəticə kartlarını görür, amma P3-ünkünü yox
+  const spectator = r.viewFor(99);
+  assert.ok(spectator.players.find((p) => p.id === 1).cards);
+  assert.equal(spectator.players.find((p) => p.id === 3).cards, null);
+  assert.equal(total(r), 3000);
 });
 
-test('baxışma birinci dövrdən əvvəl olmaz', () => {
-  const r = new Round({ players: players(3), settings: {}, now: 0, dealer: dealer({ 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } }) });
-  assert.throws(() => r.act(1, { type: 'baxis' }, 0), /ilk xod/);
+test('"Oyunum yoxdur" əmri artıq qəbul edilmir', () => {
+  const r = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } });
+  assert.throws(() => r.act(1, { type: 'yox' }, 0), /Naməlum/);
+  assert.equal(r.viewFor(1).me.canYox, undefined);
 });
 
-test('hamı pas desə son qalan udur', () => {
-  const r = new Round({ players: players(3), settings: { ante: 5 }, now: 0, dealer: dealer({ 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } }) });
+test('pasla bitən raundda kartlar açılmır', () => {
+  const r = mk(3, { 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } }, { ante: 5 });
   r.act(1, { type: 'pas' }, 0);
   r.act(2, { type: 'pas' }, 0);
   assert.equal(r.phase, 'finished');
   assert.deepEqual(r.result.winners, [3]);
-  assert.equal(r.players.get(3).balance, 1010);
+  assert.deepEqual(r.result.shown, []);
+  for (const viewer of [1, 2, 99]) for (const p of r.viewFor(viewer).players) if (p.id !== viewer) assert.equal(p.cards, null);
 });
 
-test('oyunum yoxdur + sağındakı da yoxdur → məcburi baxışma', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: 'TS KS DS', 2: '7H 8C 9D', 3: '6D 7S 9C' } }),
-  });
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'yox' }, 0);
-  r.act(3, { type: 'yox' }, 0);
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  // P2-nin növbəsi: sağındakı P1-in oyunu var → seçim sərbəstdir
-  assert.equal(r.turn, 2);
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  // P3-ün növbəsi: sağındakı P2 "yox" → məcburi baxışma, P3(9) vs P2(9) bərabər → çağıran (P3) çıxır
-  assert.equal(r.ps[3].status, 'lost');
-  assert.equal(r.turn, 1);
-});
-
-test('baxışma: güclü əl qalib gəlir', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: '9S 8S 6H', 2: '6C 7C 8D', 3: 'TD 10D 6S' } }),
-  });
-  // xallar: P1=17, P2=13, P3=21
+test('baxış seçimi: ilk dövrdən əvvəl bağlı, sonra açıq', () => {
+  const r = mk(3, { 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } });
+  assert.equal(r.viewFor(1).me.canBaxis, false);
+  assert.match(r.viewFor(1).me.baxisHint, /ilk xod/);
   r.act(1, { type: 'xod', amount: 10 }, 0);
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'pas' }, 0);
-  // P2 xod, P3 P2 ilə baxışır
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  assert.equal(r.turn, 3);
-  r.act(3, { type: 'baxis' }, 0);
-  assert.equal(r.phase, 'finished');
-  assert.deepEqual(r.result.winners, [3]);
+  assert.equal(r.viewFor(1).me.canBaxis, true);
+  assert.equal(r.viewFor(1).me.baxisTarget, 3);
 });
 
-test('bərabər baxışma razılıqla → şərik qalib olanda bank bölünür', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: '9S 8S 6H', 2: '9C 8C 7D', 3: 'TD 10D 6S' } }),
-  });
-  // P1=17, P2=17, P3=21
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  r.act(3, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'baxis', tieOffer: true }, 0); // P2 → P1
-  assert.equal(r.phase, 'tieOffer');
-  assert.throws(() => r.act(3, { type: 'tieAccept' }, 0));
-  r.act(1, { type: 'tieAccept' }, 0);
-  assert.equal(r.ps[2].status, 'attached');
-  assert.equal(r.ps[2].attachedTo, 1);
-  assert.equal(r.turn, 3);
-  // P3 xod edir, P1 P3 ilə baxışır və uduzur → P2 də heç nə almır
-  r.act(3, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'baxis' }, 0);
-  assert.equal(r.phase, 'finished');
-  assert.deepEqual(r.result.winners, [3]);
-});
+// ---------------- 2 oyunçu təklifləri ----------------
+const two = (s = {}) => mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C' } }, s);
 
-test('şərik: partnyor udanda bank bərabər bölünür', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6S' } }),
-  });
-  // P1=21, P2=21, P3=17
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  r.act(3, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'baxis', tieOffer: true }, 0);
-  r.act(1, { type: 'tieAccept' }, 0);
-  r.act(3, { type: 'baxis' }, 0); // P3 vs P1 → P1 udur
+test('bölmə təklifi qəbul → bank yarı bölünür, kartlar açılmır', () => {
+  const r = two();
+  r.act(1, { type: 'xod', amount: 30 }, 0);
+  r.act(2, { type: 'offerSplit' }, 0);
+  assert.equal(r.phase, 'offer');
+  assert.throws(() => r.act(2, { type: 'offerAccept' }, 0), /cavab/);
+  r.act(1, { type: 'offerAccept' }, 0);
   assert.equal(r.phase, 'finished');
-  assert.deepEqual(r.result.winners.sort(), [1, 2]);
-  const pot = 30 + 40 + 10 + 10; // ante + 4 xod + 2 baxışma
-  assert.equal(r.result.payouts[1] + r.result.payouts[2], pot);
-  assert.equal(r.result.payouts[1], pot / 2);
-});
-
-test('rədd edilmiş bərabərlik → çağıran çıxır', () => {
-  const r = new Round({
-    players: players(3), settings: {}, now: 0,
-    dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6S' } }),
-  });
-  ['xod', 'xod', 'xod', 'xod'].forEach((_, i) => r.act([1, 2, 3, 1][i], { type: 'xod', amount: 10 }, 0));
-  r.act(2, { type: 'baxis', tieOffer: true }, 0);
-  r.act(1, { type: 'tieDecline' }, 0);
-  assert.equal(r.ps[2].status, 'lost');
-});
-
-test('son iki nəfər bərabər → bölmək', () => {
-  const r = new Round({
-    players: players(2), settings: { ante: 10 }, now: 0,
-    dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }),
-  });
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'baxis' }, 0);
-  assert.equal(r.phase, 'tieDecision');
-  r.act(1, { type: 'tieVote', choice: 'seka' }, 0);
-  r.act(2, { type: 'tieVote', choice: 'bol' }, 0);
-  assert.equal(r.phase, 'finished');
+  assert.equal(r.result.how, 'split');
   assert.equal(r.result.payouts[1], 25);
   assert.equal(r.result.payouts[2], 25);
+  assert.deepEqual(r.result.shown, []);
+  assert.equal(total(r), 2000);
 });
 
-test('Seka: bərabər → qoşulma (ante×2) → 4 kart', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, minBet: 10 }, now: 0,
-    dealer: dealer({
-      1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6S' },
-      2: { 1: '7S 8S 9H 10C', 2: 'TD KD DD 6C', 3: '6H 7H 8H 9S' },
-    }),
+test('təklif rədd → oyun davam edir, növbə vaxtı uzanmır, bölgü yaranmır', () => {
+  const r = two({ turnSeconds: 60 });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  const dl = r.turnDeadline;
+  r.act(2, { type: 'offerSeka' }, 1000);
+  assert.ok(r.pending.deadline <= dl);
+  r.act(1, { type: 'offerDecline' }, 2000);
+  assert.equal(r.phase, 'betting');
+  assert.equal(r.turn, 2);
+  assert.equal(r.turnDeadline, dl);
+  assert.equal(r.pot, 30);
+  // eyni növbədə ikinci təklif olmaz
+  assert.throws(() => r.act(2, { type: 'offerSplit' }, 3000), /artıq təklif/);
+  assert.equal(r.viewFor(2, 3000).me.canOffer, false);
+  r.act(2, { type: 'xod', amount: 10 }, 3000);
+  // yeni növbədə yenidən olar
+  assert.equal(r.viewFor(1, 3000).me.canOffer, true);
+});
+
+test('təklifə vaxtında cavab verilməsə rədd sayılır; vaxt azdırsa təklif olmaz', () => {
+  const r = two({ turnSeconds: 60 });
+  r.act(1, { type: 'offerSplit' }, 0);
+  r.tick(TIMING.OFFER_MS + 1);
+  assert.equal(r.phase, 'betting');
+  assert.equal(r.turn, 1);
+  assert.equal(r.pot, 20);
+  const r2 = two({ turnSeconds: 60 });
+  assert.throws(() => r2.act(1, { type: 'offerSeka' }, 57_000), /vaxt azdır/);
+});
+
+test('təklif yalnız 2 oyunçu qalanda və yalnız növbəsi olana', () => {
+  const r = mk(3, { 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } });
+  assert.throws(() => r.act(1, { type: 'offerSplit' }, 0), /2 oyunçu/);
+  const r2 = two();
+  assert.throws(() => r2.act(2, { type: 'offerSplit' }, 0), /Növbə/);
+});
+
+test('Seka təklifi qəbul → bank saxlanılır, 4 kart, oyunçu özü kart atır', () => {
+  const r = mk(3, {
+    1: { 1: '7S 8C 9D', 2: 'TC KC 7D', 3: '6H 7H 9S' },
+    2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C', 3: '9S 9H 10D 7C' },
   });
   r.act(1, { type: 'xod', amount: 10 }, 0);
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'pas' }, 0);
-  r.act(1, { type: 'baxis' }, 0); // P1 vs P2: 21 = 21
-  assert.equal(r.phase, 'tieDecision');
-  r.act(1, { type: 'tieVote', choice: 'seka' }, 0);
-  r.act(2, { type: 'tieVote', choice: 'seka' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
   assert.equal(r.phase, 'sekaJoin');
-  const potBefore = r.pot;
-  assert.throws(() => r.act(1, { type: 'sekaJoin' }, 0));
+  const pot = r.pot;
+  assert.equal(pot, 50);
   r.act(3, { type: 'sekaJoin' }, 0);
-  assert.equal(r.pot, potBefore + 20);
-  r.act(2, { type: 'sekaStart' }, 0);
+  assert.equal(r.pot, 70);
+  r.act(1, { type: 'sekaStart' }, 0);
+  assert.equal(r.phase, 'discard');
+  // hamı seçmədən xod olmaz
+  assert.throws(() => r.act(1, { type: 'xod', amount: 10 }, 0), /xod etmək olmaz/);
+  const v1 = r.viewFor(1);
+  assert.equal(v1.me.hand.length, 4);
+  assert.equal(v1.me.mustDiscard, true);
+  assert.equal(v1.me.cards, null);
+  r.act(1, { type: 'discard', index: 0 }, 0); // TS-i atır (pis seçim — sistem düzəltmir)
+  assert.throws(() => r.act(1, { type: 'discard', index: 1 }, 0), /Artıq/);
+  assert.deepEqual(r.ps[1].cards, h('KS DS 6H'));
+  assert.equal(handScore(r.ps[1].cards), 20);
+  // atılan kart rəqibə göndərilmir
+  const v2 = r.viewFor(2);
+  assert.equal(JSON.stringify(v2).includes('"discarded":{'), false);
+  r.act(2, { type: 'discard', index: 3 }, 0);
+  r.act(3, { type: 'discard', index: 3 }, 0);
   assert.equal(r.phase, 'betting');
-  assert.equal(r.isSeka, true);
-  assert.equal(r.ps[1].cards.length, 4);
-  r.act(1, { type: 'xod', amount: 10 }, 0);
-  r.act(2, { type: 'xod', amount: 10 }, 0);
-  r.act(3, { type: 'xod', amount: 10 }, 0);
-  r.act(1, { type: 'pas' }, 0);
-  r.act(2, { type: 'baxis' }, 0); // P2(31) vs P1? yox, P1 pas → sağındakı P3(21)
-  assert.equal(r.phase, 'finished');
-  assert.deepEqual(r.result.winners, [2]);
-  assert.equal(balances(r).reduce((a, b) => a + b), 3000);
+  assert.equal(r.ps[2].cards.length, 3);
 });
 
-test('seka vaxtı bitəndə avtomatik başlayır, qərar verilməsə bölünür', () => {
-  const r = new Round({ players: players(2), settings: {}, now: 0, dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }) });
+test('kart atma vaxtı bitdi → 4-cü kart avtomatik atılır (ən yaxşı seçilmir)', () => {
+  const r = two();
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'offerSeka' }, 0);
+  r.act(1, { type: 'offerAccept' }, 0);
+  r.act(1, { type: 'sekaStart' }, 0);
+  assert.equal(r.phase, 'discard');
+  r.act(2, { type: 'discard', index: 0 }, 0);
+  r.tick(TIMING.DISCARD_MS + 1);
+  assert.equal(r.phase, 'betting');
+  // P1 əli: TS KS DS 6H → 6H atıldı (bu halda ən yaxşı da odur), amma qayda həmişə 4-cü kartdır
+  assert.deepEqual(r.ps[1].discarded, c('6H'));
+});
+
+test('kart atma zamanı oyunçu çıxsa oyun kilidlənmir', () => {
+  const r = mk(3, {
+    1: { 1: '7S 8C 9D', 2: 'TC KC 7D', 3: '6H 7H 9S' },
+    2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C', 3: '9S 9H 10D 7C' },
+  });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'xod', amount: 10 }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(3, { type: 'sekaJoin' }, 0);
+  r.act(2, { type: 'sekaStart' }, 0);
+  r.act(1, { type: 'discard', index: 3 }, 0);
+  r.act(2, { type: 'discard', index: 3 }, 0);
+  r.removePlayer(3, 0); // P3 seçmədən çıxdı → qalanlar davam edir
+  assert.equal(r.phase, 'betting');
+  r.removePlayer(2, 0);
+  assert.equal(r.phase, 'finished');
+  assert.deepEqual(r.result.winners, [1]);
+  assert.equal(total(r), 3000);
+});
+
+test('sekada cəkpot saxlanılan 3 karta əsaslanır', () => {
+  const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotAmount: 100 });
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(1, { type: 'sekaStart' }, 0);
+  r.act(1, { type: 'discard', index: 0 }, 0); // 6S atdı → 6H 6D TC — cəkpot deyil
+  r.act(2, { type: 'discard', index: 3 }, 0);
+  assert.equal(r.phase, 'betting');
+  const r2 = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotAmount: 100 });
+  r2.act(1, { type: 'offerSeka' }, 0);
+  r2.act(2, { type: 'offerAccept' }, 0);
+  r2.act(1, { type: 'sekaStart' }, 0);
+  r2.act(1, { type: 'discard', index: 3 }, 0); // TC atdı → 6-6-6 cəkpot
+  r2.act(2, { type: 'discard', index: 3 }, 0);
+  assert.equal(r2.result.how, 'jackpot');
+  assert.equal(r2.players.get(1).balance, 1000 - 10 + 20 + 100);
+  assert.deepEqual(r2.result.shown.map((s) => s.id), [1]);
+});
+
+test('bərabər xal qaydası qalır: son baxışma bərabər → seka/bölmə qərarı', () => {
+  const r = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } });
   r.act(1, { type: 'xod', amount: 10 }, 0);
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(1, { type: 'baxis' }, 0);
+  assert.equal(r.phase, 'tieDecision');
+  assert.throws(() => r.act(1, { type: 'offerSplit' }, 0), /xod etmək olmaz/);
   r.act(1, { type: 'tieVote', choice: 'seka' }, 0);
-  r.tick(31_000);
-  assert.equal(r.phase, 'finished');
+  assert.throws(() => r.act(1, { type: 'tieVote', choice: 'bol' }, 0), /Artıq/);
+  r.act(2, { type: 'tieVote', choice: 'bol' }, 0);
+  assert.equal(r.result.how, 'split');
+  assert.equal(r.result.payouts[1], 25);
+  assert.equal(r.result.shown.length, 2);
 });
 
-test('cəkpot: raund dərhal bitir, digərləri məbləği ödəyir', () => {
-  const r = new Round({
-    players: players(3), settings: { ante: 10, jackpotAmount: 100 }, now: 0,
-    dealer: dealer({ 1: { 1: '6S 6H 6D', 2: 'TC KC 7D', 3: '9D 8D 6C' } }),
-  });
-  assert.equal(r.phase, 'finished');
-  assert.equal(r.result.how, 'jackpot');
-  assert.equal(r.players.get(1).balance, 1000 - 10 + 30 + 200);
-  assert.equal(r.players.get(2).balance, 1000 - 10 - 100);
-  assert.equal(balances(r).reduce((a, b) => a + b), 3000);
+test('eyni xala baxaq: şərik, partnyor udanda bank bölünür', () => {
+  const r = mk(3, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6S' } });
+  [1, 2, 3, 1].forEach((id) => r.act(id, { type: 'xod', amount: 10 }, 0));
+  r.act(2, { type: 'baxis', tieOffer: true }, 0);
+  r.act(1, { type: 'tieAccept' }, 0);
+  assert.equal(r.ps[2].status, 'attached');
+  r.act(3, { type: 'baxis' }, 0); // P3(17) vs P1(21)
+  assert.deepEqual(r.result.winners.sort(), [1, 2]);
+  const pot = 30 + 40 + 10 + 10;
+  assert.equal(r.result.payouts[1] + r.result.payouts[2], pot);
+  assert.equal(r.result.payouts[1], pot / 2);
 });
 
 test('vaxt bitdi → səsvermə ilə pas', () => {
-  const r = new Round({ players: players(4), settings: { turnSeconds: 60 }, now: 0, dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6C', 4: '7S 8C 9H' } }) });
-  assert.equal(r.turn, 1);
+  const r = mk(4, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6C', 4: '7S 8C 9H' } }, { turnSeconds: 60 });
   assert.throws(() => r.act(2, { type: 'votePas' }, 30_000), /Vaxt/);
   r.act(2, { type: 'votePas' }, 61_000);
-  assert.equal(r.ps[1].status, 'active');
+  assert.throws(() => r.act(2, { type: 'votePas' }, 61_000), /Artıq/);
   r.act(3, { type: 'votePas' }, 61_000);
   assert.equal(r.ps[1].status, 'folded');
   assert.equal(r.turn, 2);
 });
 
-test('mənfi balans: limitsiz və limitli', () => {
-  const r = new Round({ players: players(2, 0), settings: { ante: 10 }, now: 0, dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }) });
-  r.act(1, { type: 'xod', amount: 500 }, 0);
-  assert.equal(r.players.get(1).balance, -510);
-  const r2 = new Round({ players: players(2, 0), settings: { ante: 10, debtLimit: 100 }, now: 0, dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }) });
-  assert.throws(() => r2.act(1, { type: 'xod', amount: 500 }, 0), /limit/);
+test('mənfi balans limiti və maksimum xod', () => {
+  const r = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }, { debtLimit: 100 }, 0);
+  assert.throws(() => r.act(1, { type: 'xod', amount: 500 }, 0), /limit/);
+  const r2 = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }, { maxBet: 50 });
+  assert.throws(() => r2.act(1, { type: 'xod', amount: 60 }, 0), /Maksimum/);
 });
 
-test('maksimum xod limiti', () => {
-  const r = new Round({ players: players(2), settings: { maxBet: 50 }, now: 0, dealer: dealer({ 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }) });
-  assert.throws(() => r.act(1, { type: 'xod', amount: 60 }, 0), /Maksimum/);
-  r.act(1, { type: 'xod', amount: 50 }, 0);
+test('versiya hər dəyişiklikdə artır (köhnə klik yoxlaması üçün)', () => {
+  const r = two();
+  const v = r.version;
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  assert.ok(r.version > v);
+  const v2 = r.version;
+  assert.equal(r.tick(1), false);
+  assert.equal(r.version, v2);
 });
 
-test('təsadüfi raundlar: pul itmir', () => {
-  for (let g = 0; g < 300; g++) {
+// ---------------- qarşılıqlı nəticə axınları ----------------
+test('axınlar: qalibin öz payı özünə yazılmır', () => {
+  const r = mk(3, { 1: { 1: 'TS KS DS', 2: '7H 8H 9C', 3: '6D 7D 8C' } });
+  r.act(1, { type: 'xod', amount: 20 }, 0);
+  r.act(2, { type: 'pas' }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  assert.deepEqual(flowsOf(r), { '2>1': 1000, '3>1': 1000 });
+});
+
+test('axınlar: bölmədə hər kəsin qoyduğu payı bankdan aldığı paya mütənasib gedir', () => {
+  const r = two();
+  r.act(1, { type: 'xod', amount: 30 }, 0); // P1: 40, P2: 10 → bank 50
+  r.act(2, { type: 'offerSplit' }, 0);
+  r.act(1, { type: 'offerAccept' }, 0);
+  // hər biri 25 alır: P1-in 40-ının yarısı (20) P2-yə, P2-nin 10-unun yarısı (5) P1-ə
+  assert.deepEqual(flowsOf(r), { '1>2': 2000, '2>1': 500 });
+});
+
+test('axınlar: seka daşınan bank, cəkpot, ləğv', () => {
+  // seka: P3 birinci əldə pas deyib sekaya qoşulmur — onun 10-u final qalibinə gedir
+  const r = mk(3, {
+    1: { 1: '7S 8C 9D', 2: 'TC KC 7D', 3: '6H 7H 9S' },
+    2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C' },
+  });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'xod', amount: 10 }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(1, { type: 'sekaStart' }, 0);
+  r.act(1, { type: 'discard', index: 3 }, 0);
+  r.act(2, { type: 'discard', index: 3 }, 0);
+  r.act(1, { type: 'pas' }, 0);
+  assert.deepEqual(r.result.winners, [2]);
+  assert.deepEqual(flowsOf(r), { '1>2': 2000, '3>2': 1000 });
+  // cəkpot
+  const j = mk(3, { 1: { 1: '6S 6H 6D', 2: 'TC KC 7D', 3: '9D 8D 6C' } }, { jackpotAmount: 100 });
+  assert.deepEqual(flowsOf(j), { '2>1': 11000, '3>1': 11000 });
+  // ləğv — axın yoxdur, pul qaytarılır
+  const a = mk(3, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6C' } });
+  a.act(1, { type: 'xod', amount: 50 }, 0);
+  a.abort();
+  assert.deepEqual(a.result.flows, []);
+  assert.equal(total(a), 3000);
+  assert.equal(a.players.get(1).balance, 1000);
+});
+
+test('axınlar: tək qəpik də itmir (3-ə bölünməyən bank)', () => {
+  const r = mk(3, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6S' } }, { ante: 7, minBet: 7 });
+  [1, 2, 3, 1].forEach((id) => r.act(id, { type: 'xod', amount: 7 }, 0));
+  r.act(2, { type: 'baxis', tieOffer: true }, 0);
+  r.act(1, { type: 'tieAccept' }, 0);
+  r.act(3, { type: 'baxis' }, 0);
+  const sum = r.result.flows.reduce((s, f) => s + f.cents, 0);
+  const selfShare = Object.entries(r.contrib).reduce((s, [id, cc]) => s + cc * 100 * (r.result.payouts[id] || 0) / r.result.payouts[1] / 2, 0);
+  assert.ok(sum > 0 && selfShare > 0);
+  // hər oyunçunun axın + özünə qalan payı = qoyduğu
+  for (const [id, cc] of Object.entries(r.contrib)) {
+    const out = r.result.flows.filter((f) => String(f.from) === id).reduce((s, f) => s + f.cents, 0);
+    assert.ok(out <= cc * 100);
+  }
+});
+
+// ---------------- təsadüfi sınaq ----------------
+test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', () => {
+  for (let g = 0; g < 400; g++) {
     const n = 2 + (g % 7);
     const r = new Round({ players: players(n), settings: { ante: 5, minBet: 5, jackpotAmount: 50 }, now: 0 });
     let guard = 0;
-    while (r.phase !== 'finished' && guard++ < 500) {
+    const rnd = (k) => Math.floor(Math.random() * k);
+    while (r.phase !== 'finished' && guard++ < 800) {
       if (r.phase === 'betting') {
         const id = r.turn;
-        const opts = ['xod', 'pas'];
-        if (!r.ps[id].declared) opts.push('yox');
+        const opts = ['xod', 'xod', 'pas'];
         if (r.firstCircleDone()) opts.push('baxis', 'baxis');
-        const t = opts[Math.floor(Math.random() * opts.length)];
+        if (r.active().length === 2 && !r.offerUsed) opts.push('offerSeka', 'offerSplit');
+        const t = opts[rnd(opts.length)];
         r.act(id, { type: t, amount: r.minXod() + (Math.random() < 0.3 ? 5 : 0), tieOffer: Math.random() < 0.5 }, 0);
+      } else if (r.phase === 'offer') {
+        r.act(r.pending.to, { type: Math.random() < 0.5 ? 'offerAccept' : 'offerDecline' }, 0);
       } else if (r.phase === 'tieOffer') {
         r.act(r.pending.o, { type: Math.random() < 0.5 ? 'tieAccept' : 'tieDecline' }, 0);
       } else if (r.phase === 'tieDecision') {
         r.act(r.pending.a, { type: 'tieVote', choice: 'seka' }, 0);
         r.act(r.pending.b, { type: 'tieVote', choice: Math.random() < 0.7 ? 'seka' : 'bol' }, 0);
       } else if (r.phase === 'sekaJoin') {
-        for (const id of r.sekaJoin.eligible) if (Math.random() < 0.5) r.act(id, { type: 'sekaJoin' }, 0);
-        r.act(r.sekaJoin.base[0], { type: 'sekaStart' }, 0);
+        for (const id of r.sekaJoin.eligible) if (!r.sekaJoin.joined.includes(id) && Math.random() < 0.5) r.act(id, { type: 'sekaJoin' }, 0);
+        const base = r.sekaJoin.base.filter((x) => !r.left.has(x));
+        if (Math.random() < 0.1) r.removePlayer(base[0], 0);
+        else r.act(base[0], { type: 'sekaStart' }, 0);
+      } else if (r.phase === 'discard') {
+        const waiting = r.active().filter((id) => !r.ps[id].cards);
+        if (Math.random() < 0.15) r.tick(Date.now() + TIMING.DISCARD_MS * 10);
+        else r.act(waiting[0], { type: 'discard', index: rnd(4) }, 0);
       }
     }
     assert.equal(r.phase, 'finished', `oyun ${g} bitmədi`);
     assert.equal(r.pot, 0);
-    assert.equal(balances(r).reduce((a, b) => a + b), n * 1000);
+    assert.equal(total(r), n * 1000);
+    // axın balansı: hər oyunçunun xalis axını = balans dəyişikliyi
+    const net = {};
+    for (const f of r.result.flows) { net[f.from] = (net[f.from] || 0) - f.cents; net[f.to] = (net[f.to] || 0) + f.cents; }
+    for (const p of r.players.values()) assert.equal(net[p.id] || 0, (p.balance - 1000) * 100, `oyun ${g} oyunçu ${p.id}`);
   }
 });

@@ -109,7 +109,7 @@ input:focus, select:focus { border-color: var(--gold); }
 
 /* ---------- otaq ---------- */
 .room { display: flex; flex-direction: column; min-height: calc(100vh - 57px); min-height: calc(100dvh - 57px); }
-.table-wrap { position: relative; padding: 8px 8px 0; }
+.table-wrap { position: relative; padding: 40px 8px 0; }
 .table {
   position: relative; margin: 0 auto; width: min(100%, calc(42dvh * 1.15)); aspect-ratio: 1.15;
 }
@@ -165,7 +165,8 @@ input:focus, select:focus { border-color: var(--gold); }
 .my-info .score-big { color: var(--gold); font-size: 18px; }
 .actions { max-width: 560px; margin: 0 auto; display: grid; gap: 8px; }
 .actions .row .btn { flex: 1; }
-.bet-row { display: grid; grid-template-columns: 44px 1fr 44px; gap: 6px; }
+.bet-row { display: grid; grid-template-columns: 44px 1fr 44px auto auto; gap: 6px; }
+.bet-row .btn { padding: 8px 10px; }
 .bet-row input { text-align: center; font-weight: 800; font-size: 18px; }
 .quick { display: flex; gap: 6px; flex-wrap: wrap; }
 .quick .btn { flex: 1; min-width: 60px; }
@@ -192,3 +193,72 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; padding
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; display: grid; place-items: center; padding: 16px; }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; width: min(100%, 460px); max-height: 90vh; overflow: auto; }
 .modal h3 { margin: 0 0 8px; }
+
+/* ---------- v2 ---------- */
+.btn.big { min-height: 54px; font-size: 16px; }
+.room-title { font-weight: 700; margin-left: 8px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) { .room-title { display: none; } .topbar { gap: 6px; padding: 8px 10px; } .topbar .btn.small { padding: 6px 8px; } }
+.practice-banner { margin: 6px 12px 0; padding: 6px 10px; border-radius: 10px; background: #1f3a5f; border: 1px solid #2f63c7; font-size: 12.5px; text-align: center; }
+.banner-demo { border-color: var(--gold); }
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg label { flex: 1; display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-size: 14px; background: var(--bg2); cursor: pointer; min-height: 44px; }
+.seg input { width: auto; }
+.seg small { color: var(--muted); }
+.room-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.room-row:last-child { border-bottom: 0; }
+.rr-main { flex: 1; min-width: 0; }
+.rr-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-meta { font-size: 12.5px; }
+.st-play { color: var(--gold); } .st-wait { color: var(--green); }
+.tag.bot { background: #1f4fa8; }
+.hint { font-size: 12.5px; color: var(--muted); text-align: center; }
+.offers .btn { font-size: 13.5px; }
+h4 { margin: 14px 0 4px; }
+.bot-row { margin: 4px 0; }
+
+/* kart seçimi (seka) */
+.my-hand.pick { gap: 6px; }
+.card-btn { position: relative; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 9px; transition: transform .12s; touch-action: manipulation; }
+.card-btn .card { width: 70px; }
+@media (min-width: 640px) { .card-btn .card { width: 90px; } }
+.card-btn.selected { transform: translateY(-14px) rotate(-3deg); }
+.card-btn.selected .card { filter: grayscale(.7) brightness(.75) drop-shadow(0 0 0 #000); outline: 3px solid var(--red); border-radius: 8px; }
+.card-btn .x { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-20deg); background: var(--red); color: #fff; font-weight: 800; font-size: 11px; padding: 2px 6px; border-radius: 6px; }
+.disc .card { display: inline-block; width: 26px; vertical-align: middle; opacity: .7; }
+
+/* nəticə */
+.result-box { background: rgba(0,0,0,.35); border: 1px solid var(--gold); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; font-size: 14px; }
+.result-box .plus { color: var(--green); font-weight: 700; }
+.shown { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+.shown-one { display: grid; justify-items: center; gap: 4px; font-size: 13px; }
+.shown-one.l { opacity: .8; }
+.mini-hand { display: flex; }
+.mini-hand .card { width: 40px; margin: 0 -3px; }
+.kind { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #333; font-weight: 700; }
+.k-game { background: #1f6f3a; } .k-admin { background: #6b5a12; } .k-reset { background: #6e1d22; } .k-refund { background: #1f4fa8; }
+
+/* tam ekran alternativi (Fullscreen API olmayan telefonlar) */
+body.pseudo-fs .topbar .logo, body.pseudo-fs .room-title { display: none; }
+body.pseudo-fs .topbar { padding: 4px 8px; }
+body.pseudo-fs .room { min-height: calc(100dvh - 44px); }
+body.pseudo-fs #logDetails { display: none; }
+:fullscreen body { overflow-y: auto; }
+
+.btn.stack { flex-direction: column; gap: 2px; }
+.btn.stack small { font-weight: 500; opacity: .8; font-size: 12.5px; }
+@media (max-width: 640px) {
+  .table { width: min(100%, calc(34dvh * 1.15)); }
+  .table-wrap { padding-top: 30px; }
+  .my-hand .card { width: 60px; }
+  .card-btn .card { width: 64px; }
+  .actions { gap: 6px; }
+  .hand-area { padding-top: 6px; }
+}
+@media (max-width: 520px) {
+  .topbar .lbl { display: none; }
+  body.in-room .topbar .logo { display: none; }
+}
+.seat .score { white-space: nowrap; }
+
+.db-wait { border-color: var(--gold); border-style: solid; }
+.db-wait-banner { background: #5a4310; border-color: var(--gold); }
