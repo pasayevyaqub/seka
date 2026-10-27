@@ -1,4 +1,5 @@
 // "Profilim": balans, kredit, borclar, hədiyyə, şəkil, tarixçə, qarşılıqlı nəticələr, bildirişlər
+import { azDative, azAblative } from './core.js';
 import { S, esc, fmt, fmtCents, money, api, toast, moneyCall, avatarHTML, txList, fmtDate, bakuInputToMs, msToBakuInput, LOAN_STATUS, azLower } from './core.js';
 
 export const STATS_NOTE = 'Yalnız faktiki oyun nəticələri: hər real raundda oyunçunun banka qoyduğu pul qaliblərə onların bankdan aldığı paya mütənasib bölünür; qalibin öz payı özünə yazılmır. Kredit, borc, hədiyyə, bonus, admin düzəlişləri, demo/botlu raundlar daxil deyil. Qeydlər v2 yeniləməsindən sonrakı raundlardan başlayır.';
@@ -11,6 +12,14 @@ export async function loadProfile(rerender) {
     if (S.profile.user) S.user = { ...S.user, ...S.profile.user };
     rerender();
   } catch (e) { toast(e.message); }
+}
+
+// qarşı tərəfə görə cəm: "Anara borcum: 100 xal" / "Yaqubdan alacağım: 100 xal"
+function byPerson(list, nameKey, word, from = false) {
+  if (!list.length) return '';
+  const m = new Map();
+  for (const l of list) m.set(l[nameKey], (m.get(l[nameKey]) || 0) + l.remaining);
+  return `<div class="by-person">${[...m].map(([n, v]) => `<div><b>${esc(from ? azAblative(n) : azDative(n))}</b> ${word}: <b>${fmt(v)}</b></div>`).join('')}</div>`;
 }
 
 function loanRow(l, me, side) {
@@ -37,6 +46,8 @@ export function renderProfile(topbar) {
   const owedMe = loans.filter((l) => l.lenderId === u.id && ['active', 'overdue'].includes(l.status));
   const incoming = loans.filter((l) => l.borrowerId === u.id && l.status === 'offered');
   const outgoing = loans.filter((l) => l.lenderId === u.id && l.status === 'offered');
+  const askedMe = loans.filter((l) => l.lenderId === u.id && l.status === 'requested');   // məndən borc istəyənlər
+  const myAsks = loans.filter((l) => l.borrowerId === u.id && l.status === 'requested');  // mənim istəklərim
   const overdue = loans.filter((l) => l.borrowerId === u.id && l.status === 'overdue');
   const closed = loans.filter((l) => ['paid', 'declined', 'cancelled'].includes(l.status)).slice(0, 20);
   const sum = (arr) => arr.reduce((s, l) => s + l.remaining, 0);
@@ -86,7 +97,7 @@ export function renderProfile(topbar) {
         <h2>🎁 Hədiyyə göndər</h2>
         <form data-form="gift">
           ${recipientPicker('gift', sel('gift'))}
-          <label>Məbləğ (oyun xalı)</label><input name="amount" type="number" inputmode="numeric" min="1" required>
+          <label>Məbləğ (xal)</label><input name="amount" type="number" inputmode="numeric" min="1" required>
           <label>Qeyd (istəyə görə)</label><input name="note" maxlength="120">
           <button class="btn primary block mt">Davam et</button>
         </form>
@@ -95,11 +106,35 @@ export function renderProfile(topbar) {
     </div>
 
     <div class="card-panel">
+      <h2>🙏 Borc istə</h2>
+      <form data-form="loanRequest">
+        ${recipientPicker('ask', sel('ask'))}
+        <div class="row" style="flex-wrap:wrap">
+          <div><label>Məbləğ (xal)</label><input name="amount" type="number" inputmode="numeric" min="1" required></div>
+          <div><label>Qaytarma vaxtı (Bakı)</label><input name="due" type="datetime-local" value="${msToBakuInput(Date.now() + 7 * 86_400_000)}" required></div>
+        </div>
+        <label>Qeyd (istəyə görə)</label><input name="note" maxlength="120">
+        <p class="muted" style="font-size:12px">Qarşı tərəf təsdiqləyənə qədər heç kimin balansı və borcu dəyişmir. Təsdiqdə xal onun mövcud balansından sizə keçir. ${AUTO_CLAUSE}</p>
+        <button class="btn primary block">İstəyə bax</button>
+      </form>
+    </div>
+
+    ${askedMe.length ? `<div class="card-panel"><h2>📥 Məndən borc istəyənlər</h2>${askedMe.map((l) => `
+      <div class="offer-card">
+        <div><b>${esc(l.borrowerName)}</b> sizdən <b>${fmt(l.amount)}</b> borc istəyir. Qaytarma: <b>${fmtDate(l.dueAt)}</b> (Bakı)${l.note ? ` · ${esc(l.note)}` : ''}</div>
+        <div class="muted" style="font-size:12px">Təsdiqləsəniz ${fmt(l.amount)} sizin balansınızdan çıxılıb ona keçir və borc yaranır. ${AUTO_CLAUSE}</div>
+        <div class="row mt"><button class="btn green" data-a="loanApprove" data-id="${l.id}">Təsdiqlə</button><button class="btn red" data-a="loanReject" data-id="${l.id}">Rədd et</button></div>
+      </div>`).join('')}</div>` : ''}
+    ${myAsks.length ? `<div class="card-panel"><h2>📤 Mənim borc istəklərim</h2>${myAsks.map((l) => `
+      <div class="tx"><div><b>${esc(l.lenderName)}</b> · ${fmt(l.amount)} · qaytarma ${fmtDate(l.dueAt)}<div class="meta">Cavab gözlənilir</div></div>
+      <button class="btn small red" data-a="loanWithdraw" data-id="${l.id}">Geri götür</button></div>`).join('')}</div>` : ''}
+
+    <div class="card-panel">
       <h2>💸 Borc ver</h2>
       <form data-form="loanOffer">
         ${recipientPicker('loan', sel('loan'))}
         <div class="row" style="flex-wrap:wrap">
-          <div><label>Məbləğ (oyun xalı)</label><input name="amount" type="number" inputmode="numeric" min="1" required></div>
+          <div><label>Məbləğ (xal)</label><input name="amount" type="number" inputmode="numeric" min="1" required></div>
           <div><label>Qaytarma vaxtı (Bakı)</label><input name="due" type="datetime-local" value="${msToBakuInput(Date.now() + 7 * 86_400_000)}" required></div>
         </div>
         <label>Qeyd (istəyə görə)</label><input name="note" maxlength="120">
@@ -119,10 +154,15 @@ export function renderProfile(topbar) {
       <button class="btn small red" data-a="loanCancel" data-id="${l.id}">Ləğv et</button></div>`).join('')}</div>` : ''}
 
     <div class="grid2">
-      <div class="card-panel"><h2>Kimə borcluyam</h2>${iOwe.map((l) => loanRow(l, u, 'borrower')).join('') || '<p class="muted">Borcunuz yoxdur.</p>'}</div>
-      <div class="card-panel"><h2>Kimdən alacağım var</h2>${owedMe.map((l) => loanRow(l, u, 'lender')).join('') || '<p class="muted">Alacağınız yoxdur.</p>'}</div>
+      <div class="card-panel"><h2>Kimə borcluyam</h2>${byPerson(iOwe, 'lenderName', 'borcum')}${iOwe.map((l) => loanRow(l, u, 'borrower')).join('') || '<p class="muted">Borcunuz yoxdur.</p>'}</div>
+      <div class="card-panel"><h2>Kimdən alacağım var</h2>${byPerson(owedMe, 'borrowerName', 'alacağım', true)}${owedMe.map((l) => loanRow(l, u, 'lender')).join('') || '<p class="muted">Alacağınız yoxdur.</p>'}</div>
     </div>
     ${closed.length ? `<details class="card-panel"><summary>Bağlanmış borclar və təkliflər</summary>${closed.map((l) => `<div class="tx"><div>${esc(l.lenderName)} → ${esc(l.borrowerName)} · ${fmt(l.amount)} · <span class="kind">${LOAN_STATUS[l.status]}</span><div class="meta">${fmtDate(l.closedAt || l.createdAt)}</div></div></div>`).join('')}</details>` : ''}
+
+    <div class="grid2">
+      <div class="card-panel"><h2>🎁 Göndərdiyim hədiyyələr</h2>${tgiftList(p.giftsSent, 'sent')}</div>
+      <div class="card-panel"><h2>🎉 Aldığım hədiyyələr</h2>${tgiftList(p.giftsReceived, 'received')}</div>
+    </div>
 
     <div class="card-panel"><h2>⚔️ Kimdən udmuşam / kimə uduzmuşam</h2>
       <p class="muted" style="font-size:12px">${STATS_NOTE}</p>
@@ -137,8 +177,18 @@ export function renderProfile(topbar) {
   </div>`;
 }
 
+// masa hədiyyələri (animasiyalı): qarşı tərəf, hədiyyə, tarix, qiymət, alınan xal
+function tgiftList(items, dir) {
+  if (!items?.length) return `<p class="muted">${dir === 'sent' ? 'Hələ hədiyyə göndərməmisiniz. Masada oyunçunun şəklinə toxunun.' : 'Hələ hədiyyə almamısınız.'}</p>`;
+  return items.map((g) => `<div class="tx">
+    <div>${dir === 'sent' ? '→' : '←'} <b>${esc(g.otherName || '?')}</b> · ${esc(g.giftName)}
+      <div class="meta">${fmtDate(g.createdAt)} · qiymət ${g.price} xal · alana ${g.sharePct}% = ${g.credited} xal${g.debtPaid ? ` · borca tutuldu ${g.debtPaid} xal` : ''}</div></div>
+    <div class="d ${dir === 'sent' ? 'minus' : 'plus'}">${dir === 'sent' ? `−${g.price}` : `+${g.credited}`}</div>
+  </div>`).join('');
+}
+
 function recipientPicker(target, chosen) {
-  return `<label>${target === 'gift' ? 'Alıcı' : 'Borc alan'} (ad və ya istifadəçi adı)</label>
+  return `<label>${target === 'gift' ? 'Alıcı' : target === 'ask' ? 'Kimdən istəyirsiniz' : 'Borc alan'} (ad və ya istifadəçi adı)</label>
     <input id="search-${target}" data-search="${target}" autocomplete="off" placeholder="Axtar..." value="">
     <div class="search-results" id="results-${target}"></div>
     <div class="chosen" id="chosen-${target}">${chosen ? `Seçildi: ${avatarHTML(chosen, 'sm')} <b>${esc(chosen.displayName)}</b> <span class="muted">@${esc(chosen.username)}</span>` : '<span class="muted">Hələ seçilməyib</span>'}</div>`;
@@ -197,6 +247,18 @@ export function profileForms(render, reload) {
         <button class="btn primary block" data-a="confirmLoanOffer">Təklifi göndər</button>`, payload: { borrowerId: to.id, amount, dueAt, note: data.note } };
       render();
     },
+    loanRequest: (data) => {
+      const from = S.recipient?.ask;
+      if (!from) return toast('Kimdən borc istədiyinizi seçin.');
+      const amount = Number(data.amount);
+      const dueAt = bakuInputToMs(data.due);
+      if (!(amount > 0)) return toast('Məbləğ yazın.');
+      if (!Number.isFinite(dueAt)) return toast('Qaytarma vaxtını seçin.');
+      S.modal = { title: 'Borc istəyini təsdiqlə', html: `<p><b>${esc(from.displayName)}</b> (@${esc(from.username)})-dən <b>${fmt(amount)}</b> borc istəyirsiniz.<br>Qaytarma: <b>${fmtDate(dueAt)}</b> (Bakı vaxtı)</p>
+        <p class="muted" style="font-size:12.5px">${AUTO_CLAUSE} Faiz yoxdur.</p>
+        <button class="btn primary block" data-a="confirmLoanRequest">İstəyi göndər</button>`, payload: { lenderId: from.id, amount, dueAt, note: data.note } };
+      render();
+    },
     creditRepay: async (data) => {
       const r = await moneyCall('creditRepay', '/api/credit/repay', { amount: Number(data.amount) });
       if (r) { toast(`Kredit borcu ödənildi. Qalan: ${fmt(r.creditDebt)}`, true); reload(); }
@@ -230,6 +292,26 @@ export function profileHandlers(render, reload) {
       const id = Number(el.dataset.id);
       const r = await moneyCall(`loanAccept${id}`, `/api/loans/${id}/accept`, {}).catch((e) => toast(e.message));
       if (r) { toast(`Borc qəbul edildi: +${fmt(r.amount)}`, true); S.modal = null; reload(); }
+    },
+    confirmLoanRequest: async () => {
+      const r = await moneyCall('loanRequest', '/api/loans/request', S.modal.payload).catch((e) => toast(e.message));
+      if (r) { toast(`İstək ${r.lenderName} üçün göndərildi. Təsdiqləyəndə xal balansınıza keçəcək.`, true); S.modal = null; S.recipient = { ...(S.recipient || {}), ask: null }; reload(); }
+    },
+    loanApprove: async (el) => {
+      const l = S.profile.loans.find((x) => x.id === Number(el.dataset.id));
+      if (!confirm(`${l.borrowerName}-a ${l.amount} xal borc verilsin? Balansınızdan çıxılacaq. Qaytarma: ${fmtDate(l.dueAt)}.`)) return;
+      const r = await moneyCall(`loanApprove${l.id}`, `/api/loans/${l.id}/approve`, {}).catch((e) => toast(e.message));
+      if (r) { toast(`Borc verildi: ${fmt(r.amount)}`, true); reload(); }
+    },
+    loanReject: async (el) => {
+      const id = Number(el.dataset.id);
+      const r = await moneyCall(`loanReject${id}`, `/api/loans/${id}/reject`, {}).catch((e) => toast(e.message));
+      if (r) { toast('İstək rədd edildi.', true); reload(); }
+    },
+    loanWithdraw: async (el) => {
+      const id = Number(el.dataset.id);
+      const r = await moneyCall(`loanWithdraw${id}`, `/api/loans/${id}/withdraw`, {}).catch((e) => toast(e.message));
+      if (r) { toast('İstək geri götürüldü.', true); reload(); }
     },
     loanDecline: async (el) => {
       if (!confirm('Təklifi rədd edirsiniz?')) return;
@@ -271,7 +353,7 @@ export async function uploadAvatar(file, reload) {
 export function creditModal(render) {
   S.modal = { title: '💳 Kredit istə', kind: 'creditRequest', submitLabel: 'Müraciət göndər',
     text: 'Admin müraciətinizi təsdiq edəndə məbləğ əsas balansınıza və kredit borcunuza yazılacaq (faizsiz). Bir gözləyən müraciətiniz ola bilər.',
-    fields: [{ name: 'amount', label: 'Məbləğ (oyun xalı)', type: 'number' }, { name: 'note', label: 'Qeyd (istəyə görə)' }] };
+    fields: [{ name: 'amount', label: 'Məbləğ (xal)', type: 'number' }, { name: 'note', label: 'Qeyd (istəyə görə)' }] };
   render();
 }
 

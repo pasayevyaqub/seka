@@ -5,10 +5,12 @@
 import { noteSVG, splitNotes } from './notes.js';
 import { play } from './sound.js';
 import { S } from './core.js';
+import { motionAllowed } from './giftfx.js';
 
 const st = { dealKey: '', dealStart: 0, flips: new Map(), queue: [] };
 const DEAL_STEP = 70;
 const DEAL_MS = 420;
+const FLIP_MS = 360;
 
 const reduced = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
 
@@ -74,7 +76,7 @@ function anchor(id) {
 // Hər render-dən SONRA çağırılır
 export function afterRender() {
   const now = performance.now();
-  const motion = !reduced() && typeof Element.prototype.animate === 'function';
+  const motion = motionAllowed();
 
   // 1) paylama: kartlar göyərtədən öz yerinə uçur (yalnız arxa üz / öz kartlarım)
   const dealElapsed = now - st.dealStart;
@@ -82,17 +84,40 @@ export function afterRender() {
     const deck = document.getElementById('deckAnchor');
     if (deck) {
       const d = center(deck);
+      let lastMine = -1;
       document.querySelectorAll('[data-deal]').forEach((el) => {
+        if (el.__dealKey === st.dealKey) return; // eyni element artıq animasiyadadır (morph elementi saxlayır)
+        el.__dealKey = st.dealKey;
         const i = Number(el.dataset.deal);
+        const mine = el.classList.contains('flip3d');
+        const dur = mine ? DEAL_MS + FLIP_MS : DEAL_MS;
         const delay = i * DEAL_STEP - dealElapsed;
-        if (delay + DEAL_MS <= 0) return;
+        if (delay + dur <= 0) return;
         const c = center(el);
-        el.animate([
-          { transform: `translate(${d.x - c.x}px, ${d.y - c.y}px) scale(.45) rotate(-25deg)`, opacity: 0.2 },
-          { opacity: 1, offset: 0.25 },
-          { transform: 'none', opacity: 1 },
-        ], { duration: DEAL_MS, delay, easing: 'cubic-bezier(.2,.75,.3,1)', fill: 'backwards' });
+        const from = `translate(${d.x - c.x}px, ${d.y - c.y}px) scale(.45) rotate(-25deg)`;
+        if (mine) {
+          // öz kartım: arxa üzü ilə sürüşüb gəlir, yerində çevrilir (üzü görünür)
+          lastMine = Math.max(lastMine, delay + dur);
+          el.animate([
+            { transform: `${from} rotateY(180deg)`, opacity: 0.2 },
+            { opacity: 1, offset: 0.15 },
+            { transform: 'translate(0, 0) scale(1) rotate(0) rotateY(180deg)', opacity: 1, offset: DEAL_MS / dur },
+            { transform: 'translate(0, 0) scale(1.06) rotate(0) rotateY(90deg)', offset: (DEAL_MS + FLIP_MS / 2) / dur },
+            { transform: 'none', opacity: 1 },
+          ], { duration: dur, delay, easing: 'ease-out', fill: 'backwards' });
+        } else {
+          el.animate([
+            { transform: from, opacity: 0.2 },
+            { opacity: 1, offset: 0.25 },
+            { transform: 'none', opacity: 1 },
+          ], { duration: DEAL_MS, delay, easing: 'cubic-bezier(.2,.75,.3,1)', fill: 'backwards' });
+        }
       });
+      // öz kartlarım çevriləndə açılma səsi (bir dəfə)
+      if (lastMine > 0 && st.flipSoundKey !== st.dealKey) {
+        st.flipSoundKey = st.dealKey;
+        setTimeout(() => play('flip'), Math.max(0, lastMine - FLIP_MS / 2));
+      }
     }
   }
 
@@ -102,6 +127,8 @@ export function afterRender() {
     if (el0 > 1500) { st.flips.delete(key); continue; }
     if (!motion) continue;
     document.querySelectorAll(`[data-flip="${key}"]`).forEach((el, i) => {
+      if (el.__flipKey === key) return;
+      el.__flipKey = key;
       const delay = i * 90 - el0;
       if (delay + 380 <= 0) return;
       el.animate([{ transform: 'perspective(400px) rotateY(90deg)' }, { transform: 'none' }], { duration: 380, delay, easing: 'ease-out', fill: 'backwards' });

@@ -16,7 +16,7 @@ const DAY = 86_400_000;
 export function amountOf(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) throw new UserError('Məbləğ müsbət tam ədəd olmalıdır.');
-  if (n > MAX_AMOUNT) throw new UserError(`Məbləğ ${MAX_AMOUNT} oyun xalından çox ola bilməz.`);
+  if (n > MAX_AMOUNT) throw new UserError(`Məbləğ ${MAX_AMOUNT} xaldan çox ola bilməz.`);
   return n;
 }
 
@@ -26,7 +26,7 @@ function opKey(key) {
   if (!/^[A-Za-z0-9_:\-]{8,100}$/.test(k)) throw new UserError('Sorğu açarı (idempotency key) yoxdur və ya yanlışdır.');
   return k;
 }
-const money = (n) => `${n} oyun xalı`;
+const money = (n) => `${n} xal`;
 
 export class Finance {
   constructor(db) { this.db = db; }
@@ -96,6 +96,12 @@ export class Finance {
     const r = await this.db.get('SELECT value FROM app_settings WHERE key = $1', [key]);
     return r ? r.value : def;
   }
+  // "Oyunçu girişini aç/bağla" — bazada saxlanılır, restartdan sonra qorunur
+  async playerLoginOpen() { return (await this.getSetting('player_login_open', '1')) !== '0'; }
+  async setPlayerLoginOpen(open) {
+    await this.db.run(`INSERT INTO app_settings(key, value) VALUES('player_login_open', $1) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [open ? '1' : '0']);
+    return open;
+  }
   async signupBonus() { return Math.max(0, parseInt(await this.getSetting('signup_bonus', '100'), 10) || 0); }
   async setSignupBonus(amount) {
     const n = Number(amount);
@@ -148,7 +154,7 @@ export class Finance {
       if (newLimit !== undefined && newLimit !== null && newLimit !== '') {
         const lim = Number(newLimit);
         if (!Number.isInteger(lim) || lim < 0 || lim > MAX_AMOUNT) throw new UserError('Limit 0 və ya müsbət tam ədəd olmalıdır.');
-        if (lim < u.credit_debt) throw new UserError(`Limit mövcud kredit borcundan (${u.credit_debt} oyun xalı) az ola bilməz.`);
+        if (lim < u.credit_debt) throw new UserError(`Limit mövcud kredit borcundan (${u.credit_debt} xal) az ola bilməz.`);
         await ctx.q.run('UPDATE users SET credit_limit = $1 WHERE id = $2', [lim, u.id]);
       }
       const st = await ctx.q.run(`UPDATE credit_requests SET status = 'approved', approved_amount = $1, decided_by = $2, decided_at = $3, admin_note = $4 WHERE id = $5 AND status = 'pending'`,
@@ -163,7 +169,7 @@ export class Finance {
       }
       const balance = Number(row.balance);
       ctx.changes.push({ userId: u.id, delta: amount, balance });
-      await this.journal(ctx, { userId: u.id, delta: amount, balance, reason: `Admin krediti (borc: ${Number(row.credit_debt)} oyun xalı)`, kind: 'credit', by: adminId, note: cleanNote(note) });
+      await this.journal(ctx, { userId: u.id, delta: amount, balance, reason: `Admin krediti (borc: ${Number(row.credit_debt)} xal)`, kind: 'credit', by: adminId, note: cleanNote(note) });
       await this.notifyIn(ctx, u.id, 'credit', `Kredit müraciətiniz təsdiqləndi: +${money(amount)}. Kredit borcunuz: ${money(Number(row.credit_debt))} (faizsiz).`);
       return { userId: u.id, amount, creditDebt: Number(row.credit_debt) };
     });
@@ -186,7 +192,7 @@ export class Finance {
     return this.op(key, adminId, 'credit-limit', async (ctx) => {
       const u = await this.activeUser(ctx.q, userId, 'Oyunçu');
       const r = await ctx.q.run('UPDATE users SET credit_limit = $1 WHERE id = $2 AND credit_debt <= $1', [lim, u.id]);
-      if (r.changes !== 1) throw new UserError(`Limit mövcud kredit borcundan (${u.credit_debt} oyun xalı) az ola bilməz.`);
+      if (r.changes !== 1) throw new UserError(`Limit mövcud kredit borcundan (${u.credit_debt} xal) az ola bilməz.`);
       await this.notifyIn(ctx, u.id, 'credit', `Kredit limitiniz ${money(lim)} təyin edildi.`);
       return { userId: u.id, limit: lim };
     });
@@ -206,7 +212,7 @@ export class Finance {
       }
       const balance = Number(row.balance);
       ctx.changes.push({ userId, delta: -amount, balance });
-      await this.journal(ctx, { userId, delta: -amount, balance, reason: `Kredit borcu ödənildi (qalan: ${Number(row.credit_debt)} oyun xalı)`, kind: 'credit_repay' });
+      await this.journal(ctx, { userId, delta: -amount, balance, reason: `Kredit borcu ödənildi (qalan: ${Number(row.credit_debt)} xal)`, kind: 'credit_repay' });
       return { amount, creditDebt: Number(row.credit_debt) };
     });
   }
@@ -253,7 +259,7 @@ export class Finance {
       const n = cleanNote(note);
       let b;
       if (opName === 'add') b = await this.creditTo(ctx, u.id, amount);
-      else b = await this.debit(ctx, u.id, amount, `Balans ${u.balance} oyun xalıdır — ondan çox çıxmaq olmaz.`);
+      else b = await this.debit(ctx, u.id, amount, `Balans ${u.balance} xaldır — ondan çox çıxmaq olmaz.`);
       const delta = opName === 'add' ? amount : -amount;
       await this.journal(ctx, { userId: u.id, delta, balance: b, reason: `Admin: ${opName === 'add' ? 'əlavə' : 'çıxma'}${n ? ' — ' + n : ''}`, kind: 'admin', by: adminId, note: n });
       return { userId: u.id, delta, balance: b };
@@ -301,6 +307,69 @@ export class Finance {
     });
   }
 
+  // ---------- "Borc istə": borc alan istəyir, borc verən təsdiqləyir ----------
+  async requestLoan(borrowerId, lenderId, amount, dueAt, note, key, t = now()) {
+    amount = amountOf(amount);
+    lenderId = Number(lenderId);
+    dueAt = Number(dueAt);
+    if (lenderId === borrowerId) throw new UserError('Özünüzdən borc istəyə bilməzsiniz.');
+    if (!(lenderId > 0)) throw new UserError('Botlardan borc istəmək olmaz.');
+    if (!Number.isFinite(dueAt) || dueAt < t + 10 * 60_000) throw new UserError('Qaytarma vaxtı ən azı 10 dəqiqə sonra olmalıdır.');
+    if (dueAt > t + 366 * DAY) throw new UserError('Qaytarma vaxtı 1 ildən çox ola bilməz.');
+    return this.op(key, borrowerId, 'loan-request', async (ctx) => {
+      const borrower = await this.activeUser(ctx.q, borrowerId);
+      const lender = await this.activeUser(ctx.q, lenderId, 'Borc verən');
+      const row = await ctx.q.get(
+        `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at) VALUES($1, $2, $3, $3, $4, 'requested', $5, $6) RETURNING id`,
+        [lenderId, borrowerId, amount, dueAt, cleanNote(note), t]);
+      await this.notifyIn(ctx, lenderId, 'loan', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istəyir. Profilim bölməsində təsdiqləyin və ya rədd edin.`);
+      return { loanId: Number(row.id), lenderName: lender.display_name };
+    });
+  }
+
+  /** Borc verənin təsdiqi: balans yalnız indi yoxlanılır; köçürmə və borcun yaranması bir tranzaksiyada */
+  async approveLoanRequest(lenderId, loanId, key, t = now()) {
+    return this.op(key, lenderId, 'loan-approve', async (ctx) => {
+      const loan = await ctx.q.get('SELECT * FROM loans WHERE id = $1', [loanId]);
+      if (!loan || Number(loan.lender_id) !== lenderId) throw new UserError('İstək tapılmadı.');
+      if (loan.status !== 'requested') throw new UserError('Bu istək artıq aktiv deyil.');
+      if (Number(loan.due_at) <= t) throw new UserError('Qaytarma vaxtı artıq keçib — bu istək təsdiqlənə bilməz.');
+      const lender = await this.activeUser(ctx.q, lenderId);
+      const borrower = await this.activeUser(ctx.q, loan.borrower_id, 'Borc alan');
+      const st = await ctx.q.run(`UPDATE loans SET status = 'active', accepted_at = $1 WHERE id = $2 AND status = 'requested' AND due_at > $1`, [t, loanId]);
+      if (st.changes !== 1) throw new UserError('Bu istək artıq aktiv deyil.');
+      const amount = Number(loan.amount);
+      const b1 = await this.debit(ctx, lenderId, amount, `Balansınız bu borc üçün çatmır (${money(amount)}).`);
+      const b2 = await this.creditTo(ctx, borrower.id, amount);
+      await this.journal(ctx, { userId: lenderId, delta: -amount, balance: b1, reason: `Borc verildi → ${borrower.display_name} (#${loanId})`, kind: 'loan_out', counterparty: borrower.id });
+      await this.journal(ctx, { userId: borrower.id, delta: amount, balance: b2, reason: `Borc alındı ← ${lender.display_name} (#${loanId})`, kind: 'loan_in', counterparty: lenderId });
+      await this.notifyIn(ctx, borrower.id, 'loan', `${lender.display_name} borc istəyinizi (${money(amount)}) təsdiqlədi.`);
+      return { loanId, amount };
+    });
+  }
+
+  async rejectLoanRequest(lenderId, loanId, key) {
+    return this.op(key, lenderId, 'loan-reject', async (ctx) => {
+      const loan = await ctx.q.get('SELECT * FROM loans WHERE id = $1', [loanId]);
+      if (!loan || Number(loan.lender_id) !== lenderId) throw new UserError('İstək tapılmadı.');
+      const st = await ctx.q.run(`UPDATE loans SET status = 'declined', closed_at = $1 WHERE id = $2 AND status = 'requested'`, [now(), loanId]);
+      if (st.changes !== 1) throw new UserError('Bu istək artıq aktiv deyil.');
+      await this.notifyIn(ctx, Number(loan.borrower_id), 'loan', `Borc istəyiniz (${money(Number(loan.amount))}) rədd edildi.`);
+      return { loanId };
+    });
+  }
+
+  async withdrawLoanRequest(borrowerId, loanId, key) {
+    return this.op(key, borrowerId, 'loan-withdraw', async (ctx) => {
+      const loan = await ctx.q.get('SELECT * FROM loans WHERE id = $1', [loanId]);
+      if (!loan || Number(loan.borrower_id) !== borrowerId) throw new UserError('İstək tapılmadı.');
+      const st = await ctx.q.run(`UPDATE loans SET status = 'cancelled', closed_at = $1 WHERE id = $2 AND status = 'requested'`, [now(), loanId]);
+      if (st.changes !== 1) throw new UserError('İstək artıq cavablandırılıb — ləğv etmək olmaz.');
+      await this.notifyIn(ctx, Number(loan.lender_id), 'loan', `Borc istəyi (${money(Number(loan.amount))}) geri götürüldü.`);
+      return { loanId };
+    });
+  }
+
   async declineLoan(borrowerId, loanId, key) {
     return this.op(key, borrowerId, 'loan-decline', async (ctx) => {
       const loan = await ctx.q.get('SELECT * FROM loans WHERE id = $1', [loanId]);
@@ -338,8 +407,8 @@ export class Finance {
     const names = await ctx.q.all('SELECT id, display_name FROM users WHERE id IN ($1, $2)', [borrowerId, lenderId]);
     const nm = (id) => names.find((x) => Number(x.id) === id)?.display_name ?? '?';
     const label = kind === 'auto' ? 'Avtomatik borc tutulması' : 'Borc ödənişi';
-    await this.journal(ctx, { userId: borrowerId, delta: -amount, balance: b1, reason: `${label} → ${nm(lenderId)} (#${loan.id}, qalan ${after} oyun xalı)`, kind: kind === 'auto' ? 'loan_auto_out' : 'loan_repay_out', counterparty: lenderId });
-    await this.journal(ctx, { userId: lenderId, delta: amount, balance: b2, reason: `${label} ← ${nm(borrowerId)} (#${loan.id}, qalan ${after} oyun xalı)`, kind: kind === 'auto' ? 'loan_auto_in' : 'loan_repay_in', counterparty: borrowerId });
+    await this.journal(ctx, { userId: borrowerId, delta: -amount, balance: b1, reason: `${label} → ${nm(lenderId)} (#${loan.id}, qalan ${after} xal)`, kind: kind === 'auto' ? 'loan_auto_out' : 'loan_repay_out', counterparty: lenderId });
+    await this.journal(ctx, { userId: lenderId, delta: amount, balance: b2, reason: `${label} ← ${nm(borrowerId)} (#${loan.id}, qalan ${after} xal)`, kind: kind === 'auto' ? 'loan_auto_in' : 'loan_repay_in', counterparty: borrowerId });
     await ctx.q.run('INSERT INTO loan_payments(loan_id, amount, kind, remaining_after, executed_at) VALUES($1, $2, $3, $4, $5)', [loan.id, amount, kind, after, t]);
     const tail = after === 0 ? 'Borc tam bağlandı.' : `Qalan borc: ${money(after)}.`;
     await this.notifyIn(ctx, borrowerId, 'loan', `${label}: ${nm(lenderId)}-ə ${money(amount)} ödənildi. ${tail}`);
@@ -369,11 +438,20 @@ export class Finance {
   async collectDue(borrowerId, t = now()) {
     return this.db.tx(async (q) => {
       const ctx = { q, key: null, changes: [], notify: [] };
+      const payments = await this.collectDueIn(ctx, borrowerId, t);
+      return { payments, changes: ctx.changes, notify: ctx.notify };
+    });
+  }
+
+  /** collectDue-nun gövdəsi: çağıranın tranzaksiyası (ctx) daxilində işləyir — məs. hədiyyə ilə eyni tranzaksiyada */
+  async collectDueIn(ctx, borrowerId, t = now()) {
+    const q = ctx.q;
+    {
       const loans = await q.all(
         `SELECT * FROM loans WHERE borrower_id = $1 AND status IN ('active', 'overdue') AND remaining > 0 AND due_at <= $2 ORDER BY due_at ASC, id ASC`,
         [borrowerId, t]);
       const payments = [];
-      if (!loans.length) return { payments, changes: [], notify: [] };
+      if (!loans.length) return payments;
       const u = await this.userIn(q, borrowerId);
       let bal = u ? u.balance : 0;
       for (const loan of loans) {
@@ -390,13 +468,108 @@ export class Finance {
           }
         }
       }
-      return { payments, changes: ctx.changes, notify: ctx.notify };
-    });
+      return payments;
+    }
   }
 
   async dueBorrowers(t = now()) {
     const rows = await this.db.all(`SELECT DISTINCT borrower_id FROM loans WHERE status IN ('active', 'overdue') AND remaining > 0 AND due_at <= $1`, [t]);
     return rows.map((r) => Number(r.borrower_id));
+  }
+
+  // ---------- masa hədiyyələri (animasiyalı, oyun xalı ilə) ----------
+  async giftTypes(q = this.db, onlyActive = false) {
+    const rows = await q.all(`SELECT id, name, price, active, sort FROM gift_types ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`);
+    return rows.map((g) => ({ id: g.id, name: g.name, price: Number(g.price), active: Number(g.active) === 1 }));
+  }
+  async giftSharePct(q = this.db) {
+    const r = await q.get(`SELECT value FROM app_settings WHERE key = 'gift_share_pct'`);
+    const n = parseInt(r?.value ?? '30', 10);
+    return Number.isInteger(n) && n >= 0 && n <= 100 ? n : 30;
+  }
+  /** Admin: faiz (0–100) və hər hədiyyənin qiyməti/aktivliyi. Köhnə əməliyyatlara təsir etmir (onlarda o anki dəyərlər saxlanılıb). */
+  async setGiftSettings({ sharePct, gifts } = {}) {
+    return this.db.tx(async (q) => {
+      if (sharePct !== undefined && sharePct !== null && sharePct !== '') {
+        const n = Number(sharePct);
+        if (!Number.isInteger(n) || n < 0 || n > 100) throw new UserError('Alana keçən faiz 0–100 arası tam ədəd olmalıdır.');
+        await q.run(`INSERT INTO app_settings(key, value) VALUES('gift_share_pct', $1) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(n)]);
+      }
+      for (const g of Array.isArray(gifts) ? gifts : []) {
+        const row = await q.get('SELECT id FROM gift_types WHERE id = $1', [String(g.id)]);
+        if (!row) throw new UserError('Hədiyyə tapılmadı.');
+        const price = Number(g.price);
+        if (!Number.isInteger(price) || price < 1 || price > MAX_AMOUNT) throw new UserError('Hədiyyənin qiyməti müsbət tam ədəd olmalıdır.');
+        await q.run('UPDATE gift_types SET price = $1, active = $2 WHERE id = $3', [price, g.active ? 1 : 0, row.id]);
+      }
+      return { sharePct: await this.giftSharePct(q), gifts: await this.giftTypes(q) };
+    });
+  }
+
+  /**
+   * Hədiyyə göndərmək: göndərəndən qiymət çıxılır, alana faiz qədər (aşağı yuvarlaqlaşdırılmış) xal yazılır,
+   * qalan hissə dövriyyədən çıxır. Alanın vaxtı çatmış borcları EYNİ tranzaksiyada avtomatik tutulur.
+   * Qiymət, faiz, icazələr serverdə yoxlanılır; idempotency açarı təkrar/paralel sorğunu bir dəfə icra edir.
+   */
+  async sendTableGift(fromId, toId, giftId, roomCode, key, t = now()) {
+    toId = Number(toId);
+    if (toId === fromId) throw new UserError('Özünüzə hədiyyə göndərə bilməzsiniz.');
+    if (!(toId > 0)) throw new UserError('Botlara hədiyyə göndərmək olmaz.');
+    return this.op(key, fromId, 'tgift', async (ctx) => {
+      const g = await ctx.q.get('SELECT id, name, price, active FROM gift_types WHERE id = $1', [String(giftId ?? '')]);
+      if (!g) throw new UserError('Hədiyyə tapılmadı.');
+      if (Number(g.active) !== 1) throw new UserError('Bu hədiyyə hazırda aktiv deyil.');
+      const from = await this.activeUser(ctx.q, fromId);
+      const to = await this.activeUser(ctx.q, toId, 'Alıcı');
+      const price = Number(g.price);
+      const pct = await this.giftSharePct(ctx.q);
+      const credited = Math.floor((price * pct) / 100);
+      const burned = price - credited;
+      const b1 = await this.debit(ctx, fromId, price,
+        `Balansınız çatmır: «${g.name}» ${price} xal, balansınız ${from.balance} xal.`);
+      await this.journal(ctx, { userId: fromId, delta: -price, balance: b1, kind: 'tgift_out', counterparty: toId,
+        reason: `Masa hədiyyəsi «${g.name}» → ${to.display_name} (qiymət ${price}, alana ${pct}% = ${credited})` });
+      let toBal = to.balance;
+      if (credited > 0) {
+        toBal = await this.creditTo(ctx, toId, credited);
+        await this.journal(ctx, { userId: toId, delta: credited, balance: toBal, kind: 'tgift_in', counterparty: fromId,
+          reason: `Masa hədiyyəsi «${g.name}» ← ${from.display_name} (qiymət ${price}, ${pct}%)` });
+      }
+      const row = await ctx.q.get(
+        `INSERT INTO table_gifts(from_id, to_id, gift_id, gift_name, price, share_pct, credited, burned, debt_paid, room_code, op_key, created_at)
+         VALUES($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11) RETURNING id`,
+        [fromId, toId, g.id, g.name, price, pct, credited, burned, roomCode || null, ctx.key, t]);
+      // alanın vaxtı çatmış borcları — mövcud avtomatik tutulma qaydası ilə (sıra: köhnə müddət, sonra kiçik ID)
+      const payments = credited > 0 ? await this.collectDueIn(ctx, toId, t) : [];
+      const debtPaid = payments.reduce((a, p) => a + p.paid, 0);
+      if (debtPaid > 0) await ctx.q.run('UPDATE table_gifts SET debt_paid = $1 WHERE id = $2', [debtPaid, row.id]);
+      const toBalance = toBal - debtPaid;
+      await this.notifyIn(ctx, toId, 'tgift',
+        `🎁 ${from.display_name} sizə «${g.name}» göndərdi. Hədiyyədən gələn: +${credited} xal.`
+        + (debtPaid > 0 ? ` Borca tutulan: ${debtPaid} xal.` : '')
+        + ` Qalan balans: ${toBalance} xal.`);
+      return {
+        giftLogId: Number(row.id), giftId: g.id, giftName: g.name, price, sharePct: pct, credited, burned, debtPaid,
+        fromId, fromName: from.display_name, toId, toName: to.display_name, balance: b1, toBalance,
+        payments: payments.map((p) => ({ loanId: p.loanId, paid: p.paid, lenderId: p.lenderId })),
+      };
+    });
+  }
+
+  async tableGiftsFor(userId, dir, limit = 100) {
+    const col = dir === 'sent' ? 'from_id' : 'to_id';
+    const other = dir === 'sent' ? 'to_id' : 'from_id';
+    const rows = await this.db.all(
+      `SELECT g.*, u.display_name AS other_name FROM table_gifts g LEFT JOIN users u ON u.id = g.${other}
+       WHERE g.${col} = $1 ORDER BY g.id DESC LIMIT $2`, [userId, limit]);
+    return rows.map(normTGift);
+  }
+
+  async adminTableGifts(limit = 1000) {
+    const rows = await this.db.all(
+      `SELECT g.*, a.display_name AS from_name, a.username AS from_username, b.display_name AS to_name, b.username AS to_username
+       FROM table_gifts g LEFT JOIN users a ON a.id = g.from_id LEFT JOIN users b ON b.id = g.to_id ORDER BY g.id DESC LIMIT $1`, [limit]);
+    return rows.map((r) => ({ ...normTGift(r), fromName: r.from_name, fromUsername: r.from_username, toName: r.to_name, toUsername: r.to_username }));
   }
 
   // ---------- oxuma ----------
@@ -427,6 +600,7 @@ export class Finance {
       pendingCredit: pending ? normReq(pending) : null,
       lastCredit: lastReq ? normReq(lastReq) : null,
       loans, history, unread: Number(unread?.n || 0),
+      giftsSent: await this.tableGiftsFor(userId, 'sent'), giftsReceived: await this.tableGiftsFor(userId, 'received'),
     };
   }
 
@@ -458,6 +632,14 @@ export class Finance {
        JOIN users u ON u.id = t.user_id LEFT JOIN users c ON c.id = t.counterparty_id LEFT JOIN users b ON b.id = t.by_user
        WHERE t.kind IN ('gift_in', 'admin_gift') ORDER BY t.id DESC LIMIT 300`);
   }
+}
+
+function normTGift(g) {
+  return {
+    id: Number(g.id), fromId: Number(g.from_id), toId: Number(g.to_id), giftId: g.gift_id, giftName: g.gift_name,
+    price: Number(g.price), sharePct: Number(g.share_pct), credited: Number(g.credited), burned: Number(g.burned),
+    debtPaid: Number(g.debt_paid), room: g.room_code, createdAt: Number(g.created_at), otherName: g.other_name,
+  };
 }
 
 function normReq(r) {

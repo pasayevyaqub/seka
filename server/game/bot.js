@@ -45,12 +45,13 @@ export function decide(view, botId, mem, now) {
   }
   if (view.phase === 'sekaJoin') {
     const sj = view.sekaJoin;
-    if (sj.eligible.includes(botId) && !sj.joined.includes(botId) && !mem.sekaDecided) {
+    if (sj.eligible.includes(botId) && !sj.joined.includes(botId) && !(sj.skipped || []).includes(botId) && !mem.sekaDecided) {
       mem.sekaDecided = true;
-      if (rnd() < 0.4) return { type: 'sekaJoin' };
+      return rnd() < 0.4 ? { type: 'sekaJoin' } : { type: 'sekaSkip' };
     }
-    // əsas oyunçu olan bot insanlara qoşulmaq üçün vaxt verir, sonra başladır
-    if (sj.base.includes(botId) && sj.deadline - now < 20_000) return { type: 'sekaStart' };
+    // əsas oyunçu olan bot yalnız qoşulmaq hüququ olan hamı qərar verəndən sonra başladır (server də bunu yoxlayır);
+    // əks halda 60 saniyəlik vaxt bitənə qədər gözləyir
+    if (sj.base.includes(botId) && !(sj.waiting || []).length) return { type: 'sekaStart' };
     return null;
   }
 

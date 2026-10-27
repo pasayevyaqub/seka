@@ -149,6 +149,52 @@ const MIGRATIONS = [
       await q.run(`UPDATE users SET status = 'approved' WHERE status = 'pending'`);
     },
   },
+  {
+    id: 5,
+    name: 'v2.3: masa hədiyyələri (animasiyalı), qiymətlər və alana keçən faiz',
+    async up(q, kind) {
+      const serial = kind === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+      // hədiyyə növləri — qiymət və aktivlik admin panelindən dəyişir
+      await q.run(`CREATE TABLE IF NOT EXISTS gift_types (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        price BIGINT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        sort INTEGER NOT NULL DEFAULT 0)`);
+      await q.run(`INSERT INTO gift_types(id, name, price, active, sort) VALUES
+        ('card_rain', 'Kart yağışı', 100, 1, 1),
+        ('table_king', 'Masa kralı', 300, 1, 2),
+        ('fire_ace', 'Odlu Tuz', 1000, 1, 3) ON CONFLICT(id) DO NOTHING`);
+      await q.run(`INSERT INTO app_settings(key, value) VALUES('gift_share_pct', '30') ON CONFLICT(key) DO NOTHING`);
+      // hər göndərilən hədiyyə: o anki qiymət, faiz və verilən xal ayrıca saxlanılır (sonrakı dəyişikliklər köhnə qeydlərə təsir etmir)
+      await q.run(`CREATE TABLE IF NOT EXISTS table_gifts (
+        id ${serial},
+        from_id INTEGER NOT NULL,
+        to_id INTEGER NOT NULL,
+        gift_id TEXT NOT NULL,
+        gift_name TEXT NOT NULL,
+        price BIGINT NOT NULL,
+        share_pct INTEGER NOT NULL,
+        credited BIGINT NOT NULL,
+        burned BIGINT NOT NULL,
+        debt_paid BIGINT NOT NULL DEFAULT 0,
+        room_code TEXT,
+        op_key TEXT,
+        created_at BIGINT NOT NULL)`);
+      await q.run('CREATE INDEX IF NOT EXISTS table_gifts_from ON table_gifts(from_id, id)');
+      await q.run('CREATE INDEX IF NOT EXISTS table_gifts_to ON table_gifts(to_id, id)');
+    },
+  },
+  {
+    id: 6,
+    name: 'v2.7: oyunçu girişi açarı (açıq), borc istəyi və borca oyun üçün indeks — məlumat silinmir',
+    async up(q) {
+      // giriş açarı ilkin olaraq AÇIQ (mövcud oyunçular əvvəlki kimi daxil olur)
+      await q.run(`INSERT INTO app_settings(key, value) VALUES('player_login_open', '1') ON CONFLICT(key) DO NOTHING`);
+      // "Borc istə" (status = 'requested') və borca oyun borcları mövcud loans cədvəlindədir — yalnız indeks əlavə olunur
+      await q.run('CREATE INDEX IF NOT EXISTS loans_status ON loans(status, lender_id)');
+    },
+  },
 ];
 
 async function addColumn(q, kind, table, col, type) {

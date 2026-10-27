@@ -6,10 +6,16 @@ Bu layihədəki bütün kart, masa, əskinas və səs materialları **layihə ü
 |---|---|---|---|
 | Kartların üzü (6–10, J, Q, K, A), saray fiqurları | `public/cards.js` | Orijinal SVG, bu layihə üçün çəkilib. Klassik kart üslubu (iki başlı fiqurlar, klassik pip düzülüşü) ümumi ənənədir; konkret nəşrin surəti deyil. | Layihənin öz kodu — layihə ilə eyni şərtlərlə |
 | Suit simvolları (♥ ♦ ♠ ♣) | `public/index.html` (`<symbol>`) | Orijinal SVG yolları | Layihənin öz kodu |
-| Kartın arxa üzü (yaşıl, bəzəkli) | `public/cards.js`, `public/index.html` | Orijinal SVG | Layihənin öz kodu |
-| Virtual əskinaslar | `public/notes.js` | Orijinal SVG. Rənglər oyun xalı nominallarını fərqləndirir, üzərində "VİRTUAL" və "OYUN XALI" yazılıb; real əskinasın təsviri, imzası, seriyası və qoruyucu elementləri yoxdur. | Layihənin öz kodu |
-| Masa (keçə, taxta, dəri, qızılı xətt) | `public/style.css` | CSS qradiyentləri | Layihənin öz kodu |
+| Kartın arxa üzü (qızılı haşiyə, yaşıl sahə, səkkizguşəli ulduz) | `public/cards.js`, `public/index.html` | Orijinal SVG | Layihənin öz kodu |
+| Virtual xal əskinasları | `public/notes.js` | Orijinal SVG: üzərində "XAL" və səkkizguşəli ulduz; real pulun təsviri, imzası, seriyası və qoruyucu elementləri yoxdur. | Layihənin öz kodu |
+| Masa (keçə toxuması, dəri, tikiş, mis bəzək, taxta fon) | `public/style.css` | CSS qradiyentləri və brauzerdə işləyən SVG `feTurbulence` filtrləri (data URI) — şəkil faylı yoxdur | Layihənin öz kodu |
 | Səslər (paylama, pul, qələbə, növbə) | `public/sound.js` | Brauzerdə WebAudio ilə sintez olunur, səs faylı yoxdur | Layihənin öz kodu |
+| Hədiyyə animasiyaları: qızılı tac, alov, qığılcımlar, uçan kartlar | `public/giftfx.js`, `public/style.css` | Orijinal SVG (tac, alov), CSS animasiyaları və Canvas qığılcımları; kartlar `cards.js`-dən | Layihənin öz kodu |
+| Hədiyyə səsləri | `public/sound.js` | WebAudio ilə sintez | Layihənin öz kodu |
+| Bot avatarı (robot) | `public/core.js` | Orijinal SVG | Layihənin öz kodu |
+| Masa ətrafı bəzəklər (fənər, çay stəkanı, qoz-fındıq, qutu, yarpaqlar), keçədəki dairəvi naxış | `public/decor.js` | Orijinal SVG | Layihənin öz kodu |
+| Üst panel ikonları (geri, səs, tam ekran, sikkələr, oyunçular) | `public/room.js`, `public/style.css` | Orijinal xətti SVG | Layihənin öz kodu |
+| Kartın küncünü qaldırma effekti (qat, kağız, işıq, kölgə) | `public/peek.js`, `public/style.css` | CSS clip-path + qradiyentlər, hesablanmış həndəsə | Layihənin öz kodu |
 | Emojilər | sistem şrifti | İstifadəçinin cihazının emoji şrifti | Cihaz istehsalçısının |
 
 ## Hazır lisenziyalı kart dəsti haqqında

@@ -38,7 +38,7 @@ async function setup() {
 }
 
 // ---------------- bonus ----------------
-test('qeydiyyat bonusu: 100 oyun xalı, bir dəfə, admin dəyişəndə yalnız gələcək qeydiyyatlara', async () => {
+test('qeydiyyat bonusu: 100 xal, bir dəfə, admin dəyişəndə yalnız gələcək qeydiyyatlara', async () => {
   const t = await setup();
   const name = `b${crypto.randomInt(1e9)}`;
   const r = await t.store.register({ username: name, displayName: name, password: '123456' }, t.fin);
@@ -255,7 +255,7 @@ test('avtomatik tutulma: qismən → "Gecikib", sonra gələn vəsaitdən qalan�
   const pays = await t.db.all('SELECT amount, kind FROM loan_payments WHERE loan_id = $1 ORDER BY id', [o.loanId]);
   assert.deepEqual(pays.map((p) => [Number(p.amount), p.kind]), [[30, 'auto'], [70, 'auto']]);
   const n = await t.fin.notifications(B);
-  assert.ok(n.some((x) => /Qalan borc: 70 oyun xalı/.test(x.text)));
+  assert.ok(n.some((x) => /Qalan borc: 70 xal/.test(x.text)));
   await t.cleanup();
 });
 

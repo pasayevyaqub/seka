@@ -63,6 +63,18 @@ function rustle(t) {
   tone(t + 0.02, 1568, 0.12, 0.05, 'sine');
 }
 
+// alovun "vıııj" səsi
+function whoosh(t) {
+  const src = ctx.createBufferSource();
+  src.buffer = noise(0.7);
+  const f = ctx.createBiquadFilter();
+  f.type = 'lowpass'; f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(3000, t + 0.4); f.frequency.exponentialRampToValueAtTime(600, t + 0.7);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+  src.connect(f).connect(g).connect(ctx.destination);
+  src.start(t); src.stop(t + 0.72);
+}
+
 function tone(t, freq, dur, gain, type = 'triangle') {
   const o = ctx.createOscillator();
   o.type = type; o.frequency.value = freq;
@@ -80,6 +92,9 @@ export function play(name, n = 1) {
     else if (name === 'money') rustle(t);
     else if (name === 'flip') swish(t, 0.25);
     else if (name === 'win') [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(t + i * 0.11, f, 0.35, 0.12));
+    else if (name === 'gift_card_rain') for (let i = 0; i < 8; i++) swish(t + i * 0.09, 0.22);
+    else if (name === 'gift_table_king') { [392, 523.25, 659.25, 783.99].forEach((f, i) => tone(t + i * 0.14, f, 0.5, 0.1)); tone(t + 0.6, 1046.5, 0.9, 0.08, 'sine'); }
+    else if (name === 'gift_fire_ace') { whoosh(t); [659.25, 880, 1318.5].forEach((f, i) => tone(t + 0.35 + i * 0.12, f, 0.6, 0.09)); }
     else if (name === 'turn') { tone(t, 880, 0.15, 0.07, 'sine'); tone(t + 0.13, 1175, 0.2, 0.06, 'sine'); }
   } catch { /* səs olmasa da oyun davam edir */ }
 }

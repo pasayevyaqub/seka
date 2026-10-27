@@ -1,19 +1,114 @@
-# Oyun xalı vahidi
-
-- İnterfeys, bildirişlər və oyun mesajlarında balans vahidi “oyun xalı” oldu.
-- Əskinas təsvirlərində valyuta işarəsi ulduzla, vahid “OYUN XALI” ilə əvəzləndi.
-- Balans rəqəmləri, oyun qaydaları və verilənlər bazasının quruluşu dəyişdirilmədi.
-
 # Dəyişikliklər
+
+## v2.7.1 — Admin paneli: canlı yenilənmədə formalar qorunur
+
+- **Problem:** `refreshAdminList()` siyahını `innerHTML` ilə yenidən yaradırdı. Canlı "staff" bildirişi (məs. yeni kredit müraciəti) gələndə "Oyunçu əlavə et" və kredit qərarı formalarına yazılan mətn silinir, fokus itirdi.
+- **Düzəliş:** admin siyahısı, tab başlıqları (gözləyən kredit sayı) və masa hədiyyəsi ayarları artıq `morph` ilə yerində yenilənir. Kredit kartları və formaları müraciət id-si ilə açarlanıb (`data-key`) — yeni müraciət yuxarı düşəndə və ya başqa müraciət siyahıdan çıxanda bir formanın yazıları başqasına keçmir.
+- **`data-keep-dirty`:** admin formalarında istifadəçinin dəyişdirdiyi sahələrin (məs. məbləğ, yeni limit, bonus) üzərinə fokusda olmasalar belə yazılmır; toxunulmamış sahələr yeni dəyəri alır. Göndərmədən sonra `form.reset()` sahələri sıfırlayır.
+- **morph:** yeni siyahıda olmayan açarlı elementlər əvvəlcədən silinir, fokuslu sahəni saxlayan element DOM-da köçürülmür (köçürmə blur edir və iPhone-da klaviaturanı bağlayır).
+- **Yoxlama:** `tools/ui-admin-morph.cjs` (Playwright, real server və real staff bildirişləri ilə) və `test/admin-morph.test.js` (innerHTML-ə qayıdışın qarşısını alan statik test).
+
+## v2.7.0 — Dairə: giriş nəzarəti, borc istə, borca oyna, seka 60 san, iPhone yazı düzəlişi
+
+- **Ad və ikon:** saytın görünən adı **Dairə** (brauzer başlığı, giriş ekranı, menyu, əsas ekrana əlavə edilən tətbiq). Yeni ikon — sadə dairə motivi (kart/pul yoxdur). Giriş ekranında yalnız ad, istifadəçi adı və şifrə; masa, otaqlar və oyunçular yalnız daxil olduqdan sonra yüklənir. Oyun qaydalarında "seka" termini qalır.
+- **Giriş:** açıq qeydiyyat bağlıdır (`/api/register` → 403); oyunçunu admin yaradır (bonus bir dəfə); "Oyunçu girişini aç/bağla" (bazada, restartdan sonra qalır; admin həmişə daxil olur; daxil olmuşları çıxarmır); bloklama və admin şifrə dəyişikliyi sessiyaları kəsir; son aktiv admin qorunur.
+- **iPhone yazı/klaviatura:** tam `innerHTML` əvəzinə `morph` — aktiv input DOM-da qalır; mətn, kursor, seçim, fokus, kompozisiya qorunur; fon yeniləməsi fokus vermir; məcburi `scrollTo` silindi; `--vvh` yalnız dəyişəndə yazılır.
+- **Seka:** qoşulma vaxtı 60 san (ayrı sabit `SEKA_JOIN_MS`); "Qoşulmuram"; qərar verməyən hüquqlu oyunçu varsa əsas oyunçular/botlar erkən başlada bilmir (serverdə yoxlanılır); vaxt bitəndə avtomatik davam.
+- **Borc istə:** borc alan istəyir, borc verən təsdiqləyir (köçürmə və borc bir tranzaksiyada), rədd/geri götürmə; profildə "X-a borcum / Y-dan alacağım".
+- **Borca oyna:** iki aktiv insan qalanda şərti (təminatsız) qoyuluş — 30 san cavab, taymer dayanır, limit yalnız yeni təsdiqlə artır, şərti qoyuluş ayrı uçot (masada 🧾 nişanı), uduzanda yalnız faktiki istifadə olunan hissə adi borc kimi yaranır (raundun son paketi ilə eyni tranzaksiyada), udanda borc yaranmır, bölmə/seka/ləğv/restart qaydaları (README 5b).
+- **Bot nişanı** yenidən görünür. Lobbi siyahısı gizli vərəqdə sorğu göndərmir. Bank mərkəzi yığcam (əskinaslar solda, məbləğ sağda).
+- **Baza:** Migration 6 — `player_login_open = 1` və `loans(status, lender_id)` indeksi; məlumat silinmir.
+
+### Dəyişən fayllar
+`server/game/engine.js` (borca oyna, seka 60 san), `server/game/bot.js`, `server/rooms.js`, `server/store.js`, `server/finance.js`, `server/app.js`, `server/db.js`; `public/morph.js` (**yeni**), `public/app.js`, `public/room.js`, `public/profile.js`, `public/admin.js`, `public/gifts.js`, `public/core.js`, `public/fx.js`, `public/style.css`, `public/index.html`, `public/manifest.webmanifest`, `public/icon.svg`; `test/credit-play.test.js` (**yeni**), `test/engine.test.js`, `test/bot.test.js`, `test/batch.test.js`, `test/integration.test.js`, `test/money-integration.test.js`; `tools/ui-peek.cjs`; `README.md`, `CHANGELOG.md`.
+
+## v2.6.0 — kartın küncünü qaldırıb baxmaq (squeeze / peek)
+
+- **Öz kartlarım əvvəlcə üzü bağlıdır.** Kartın yuxarı küncündən tutub diaqonal sürüşdürəndə künc barmağın hərəkəti qədər qatlanır. Altdan kağızın üz tərəfi, üzərində kartın rəqəmi və işarəsi görünür. Qatda işıq, qıvrım xəttində kölgə, arxa üzün üstündə qatın kölgəsi var.
+- Barmağı buraxanda, toxunma ləğv olunanda, pəncərə fokusu itəndə və ya pointer capture itəndə kart yumşaq animasiya ilə (~0.23 san) örtülür. Hər kart ayrıca açılır; sol və sağ yuxarı küncün ikisindən də tutmaq olur.
+- **Pointer Events + pointer capture:** capture `#app`-dan kənardakı daimi elementdədir. Barmaq tutulu qalarkən masa yenilənsə də (botlar oynayanda) baxış kəsilmir.
+- **Səhifə sürüşməsi:** yalnız kartın üzərində bloklanır (`touch-action: none` yalnız `.peek-card`-da).
+- **"Göstər / Ört" düyməsi** (👁): kartları yalnız sizin ekranınızda açır və yenidən örtür. Raund bitəndə öz kartlarınız açıq görünür.
+- **İlk istifadə izahı:** "Küncü sürüşdür, karta bax — Buraxanda yenə örtülür". İlk baxışdan sonra bir daha göstərilmir.
+- **Sadə rejim:** azaldılmış hərəkət, ☰ → Animasiyalar söndürülüb və ya çox zəif cihaz (1 nüvə, < 1 GB yaddaş) olduqda kartı basıb saxlayanda açılır, buraxanda bağlanır.
+- **"N xal" nişanı** kartlara baxdıqdan sonra (hamısına küncdən baxanda və ya "Göstər" ilə) görünür.
+- **Atma mərhələsi (4 kart):** kartlara küncdən baxmaq seçim etmir. Atılacaq kartı ayrıca "At" düyməsi ilə seçirsiniz, sonra "Seçilmiş kartı at" ilə təsdiqləyirsiniz.
+- **Məxfilik və qaydalar:** baxmaq serverə heç nə göndərmir, xod sayılmır, növbəni dəyişmir, rəqiblərə heç nə açmır. Rəqiblərin kartları əvvəlki kimi klientə göndərilmir. Serverdə "kartına baxıb-baxmamaq" (kor oyun / baxış haqqı) qaydası yoxdur — buna görə qeydə alınacaq bir şey yoxdur. Raund sonunda kartların açılması mövcud qayda ilə işləyir.
+- **Kod:** effekt ayrıca modulda (`public/peek.js`). Xarici kitabxana yoxdur — CSS clip-path, SVG və bir az JavaScript həndəsəsi.
+
+### Dəyişən fayllar
+`public/peek.js` (**yeni**), `public/room.js` (əl, "At" və "Göstər" düymələri, izah), `public/app.js` (quraşdırma, yenidən çəkilmədən sonra baxışın bərpası), `public/style.css`, `tools/ui-peek.cjs` (**yeni**, brauzer yoxlaması — Playwright tələb edir, layihənin asılılığı deyil), `README.md`, `CHANGELOG.md`, `package.json`.
+
+## v2.5.0 — istinad şəklinə uyğunlaşdırılmış masa
+
+- **Oturacaqlar:** oyunçu sayına görə sabit düzülüş (2–8), istinad şəklindəki kimi: yuxarı orta, sol/sağ yuxarı, sol/sağ aşağı, mən aşağı ortada. Üfüqi ekran və kompüterdə oturacaqlar ellips boyunca, avatar solda, ad/balans/kartlar sağda.
+- **Botlar:** emoji əvəzinə orijinal SVG robot avatarı. Şəkli olmayan oyunçular üçün qızılı halqalı baş hərf avatarı (şəkil yükləyən oyunçunun öz şəkli görünür).
+- **Masa:** qalın tikişli dəri kənar, mis bəzəklər, tünd yaşıl keçə, ortada solğun dairəvi naxış. Ətrafda bəzəklər: fənər, armudu stəkanda çay, qoz-fındıq qabı, oyma qutu, yarpaqlar (orijinal SVG, kliki tutmur).
+- **Bank:** "BANK" və məbləğ, altında səliqəli krem/yaşıl "XAL" əskinas dəstəsi.
+- **Üst panel:** xətti ikonlar (geri, səs, tam ekran, sikkələr). Otaq adına toxunanda otaq menyusu açılır (bildirişlər, profil, səs, animasiya, çat, jurnal); bildiriş sayı 👥 ikonunda.
+- **Alt hissə:** idarə paneli bir çərçivədə ([− xal +] · Pas · Baxış · Xod et), altında son hədiyyə sətri ("👑 Yaqub → Anar · Masa kralı"), sonra 😊 · mesaj · 🎁 · yaşıl göndər düyməsi.
+- Serif şrift (Georgia) adlarda, məbləğlərdə və düymələrdə; vaxt halqası qızılı.
+- Oyun qaydaları, balanslar, baza və hədiyyə sistemi dəyişməyib. Yeni migration yoxdur.
+
+### Dəyişən fayllar
+`public/room.js`, `public/style.css`, `public/core.js` (avatarlar), `public/notes.js`, `public/giftfx.js` (hədiyyə sətri), `public/decor.js` (**yeni**), `README.md`, `VISUALS.md`, `CHANGELOG.md`.
+
+## v2.4.0 — mobil masa görünüşü (istinad şəkli əsasında)
+
+- **Masa:** brauzerdə yaradılan keçə toxuması (SVG filtrləri, xarici şəkil yoxdur), tikişli dəri kənar, yan tərəflərdə mis bəzək, yumşaq kölgələr, taxta fon.
+- **Oturacaqlar:** avatarlar masanın içində, kənara yaxın düzülür: avatar → ad → balans → kartlar. Sizin yeriniz aşağıda ortadadır, kartlarınız masanın aşağı kənarının üstündə, "N xal" nişanı ilə. Aşağıdakı boş sahə aradan qaldırıldı. Üfüqi ekranda avatarınız kartlarınızın soluna keçir.
+- **Vaxt halqası:** növbəsi olan oyunçunun avatarında halqa və yanında "N san".
+- **Kartlar:** klassik J/Q/K (iki başlı, rəngli fiqurlar) qalır. Arxa üz yeniləndi: qızılı haşiyə, tünd yaşıl sahə, səkkizguşəli ulduz medalyonu. Paylananda kartlar göyərtədən sürüşür, öz kartlarınız yerinə çatanda çevrilir (3D), rəqibin kartı açılanda çevrilir.
+- **Xal:** bütün məbləğlər "10 000 xal" kimi göstərilir (əvvəl "AZN" yazılırdı; balanslar dəyişmir — yalnız yazılış). Bankdakı virtual əskinaslarda "XAL" və ulduz var. Xod qoyulanda əskinas oyunçudan banka uçur.
+- **Məşq zolağı:** "🎓 Məşq rejimi · əsas balansa təsir etmir".
+- **İdarə:** tək sıra — [− 10 xal +] · Pas · Baxış · Xod et (48 px hündürlük). Kartları örtmür. Növbə sizdə deyilsə: "Növbə: Ad · N san" və lazım olanda "Pas səsi".
+- **Alt sətir:** 😊 · mesaj · 🎁 (hədiyyə — masadakı oyunçunu seçmək) · ☰ (bildirişlər, profil, səs, animasiyalar, çat və jurnal). Bildiriş sayı ☰ üzərində görünür.
+- **Üst panel:** ‹ geri · 👥 otaq adı · kod · 🔊 · ⛶ · 🪙 balans (real otaqda toxunanda kredit müraciəti). Yazılar kəsilmir.
+- **Səslər:** paylama (hər kart), öz kartlarınızın və rəqib kartlarının açılması. 🔊 ilə və ☰ menyusunda söndürülür.
+- **Animasiya:** oyun idarəsinə mane olmur. "Hərəkəti azalt" və ya "Animasiyalar: söndürülüb" seçilibsə oynamır. Alt bildirişlər (toast) otaqda yuxarıda göstərilir və düymələri örtmür.
+- Oyun qaydaları, balans hesablamaları, baza və hədiyyə sistemi dəyişməyib. Yeni migration yoxdur.
+
+### Dəyişən fayllar
+`public/room.js`, `public/style.css`, `public/cards.js` (arxa üz), `public/notes.js` (XAL), `public/fx.js` (paylama + çevrilmə), `public/gifts.js` (🎁 düyməsi), `public/app.js`, `public/core.js` (xal), `public/admin.js`, `public/profile.js`, server mesajları (`server/*.js` — "AZN" → "xal"), `test/finance.test.js` (mesaj mətni), `README.md`, `VISUALS.md`.
+
+## v2.3.0 — animasiyalı masa hədiyyələri
+
+### Yeniliklər
+- Masada oyunçunun şəklinə toxunanda "Hədiyyə göndər" açılır: 🃏 Kart yağışı (100 xal), 👑 Masa kralı (300), 🔥 Odlu Tuz (1 000). Qiymət və alana keçəcək xal əvvəlcədən göstərilir, təsdiqdən sonra göndərilir.
+- Alana ilkin olaraq qiymətin 30%-i keçir (aşağı yuvarlaqlaşdırılır), qalanı dövriyyədən çıxır. Admin faizi (0–100), qiymətləri və aktivliyi dəyişir. Köhnə əməliyyatlar dəyişmir.
+- Animasiyalar orijinal SVG/CSS/Canvas ilə hazırlanıb (`public/giftfx.js`), xarici fayl yoxdur. Kliki tutmur, növbə ilə və məhdud növbədə göstərilir, bitəndə təmizlənir. Səs və animasiya ayrı-ayrı söndürülür (☰ menyusu), "hərəkəti azalt" seçiminə hörmət edilir.
+- Alana gələn xal vaxtı çatmış borclara eyni tranzaksiyada tutulur. Bildirişdə gələn xal, borca tutulan hissə və qalan balans ayrıca göstərilir.
+- Profil: "Göndərdiyim hədiyyələr" və "Aldığım hədiyyələr". Admin: "Masa hədiyyələri" bölməsi (axtarış, siyahı, ayarlar).
+- Qadağalar: özünə, bota, masada olmayana, demo/botlu otaqda göndərmək olmaz.
+- Təhlükəsizlik: server yoxlaması, tək tranzaksiya, idempotency açarı, şərtli çıxılma (mənfi balans yoxdur), aktiv raundda otaq növbəsi. WebSocket hadisəsi yalnız uğurlu ilk icradan sonra göndərilir, təkrar sorğuda göndərilmir, yaddaşda saxlanılmır.
+- Kiçik düzəliş: alt bildirişlər (toast) artıq düymələrə toxunmağa mane olmur.
+
+### Baza
+- **Migration 5** (avtomatik, SQLite və PostgreSQL): yeni cədvəllər `gift_types` (ilkin 3 hədiyyə), `table_gifts`; `app_settings.gift_share_pct = 30`. Mövcud cədvəllərə toxunulmur.
+
+### Dəyişən fayllar
+| Fayl | Dəyişiklik |
+|---|---|
+| `server/db.js` | Migration 5 |
+| `server/finance.js` | `sendTableGift`, `setGiftSettings`, `giftTypes`, `giftSharePct`, profil/admin siyahıları; `collectDue` → `collectDueIn` (eyni tranzaksiyada çağırmaq üçün) |
+| `server/app.js` | `GET /api/table-gifts`, `POST /api/table-gift`, `GET /api/admin/table-gifts`, `POST /api/admin/table-gifts/settings` |
+| `server/rooms.js` | `giftEvent` (otağa animasiya hadisəsi), `roomOfOrNull` |
+| `public/giftfx.js` | **Yeni**: animasiyalar, növbə, bildiriş, animasiya seçimi |
+| `public/gifts.js` | **Yeni**: hədiyyə göndərmə pəncərəsi |
+| `public/room.js`, `public/app.js`, `public/fx.js`, `public/sound.js`, `public/style.css` | Avatar → hədiyyə, ☰ menyusunda səs/animasiya düymələri, hədiyyə səsləri, stillər |
+| `public/profile.js`, `public/admin.js`, `public/core.js` | Hədiyyə tarixçəsi, admin bölməsi, əməliyyat növləri |
+| `test/table-gifts.test.js` | **Yeni**: 8 test |
+| `test/money-integration.test.js` | +2 test (aktiv raund, WebSocket hadisəsi, demo/bot, admin) |
+| `test/batch.test.js` | Migration 5 yoxlaması |
 
 ## v2.2.0 — maliyyə, sosial funksiyalar və yeni masa dizaynı
 
 ### Əsas yeniliklər
-- **Qeydiyyat təsdiqsizdir** + bir dəfəlik qeydiyyat bonusu (standart 100 virtual oyun xalı, admin dəyişə bilər, yalnız gələcək qeydiyyatlara aiddir). Köhnə "gözləyən" hesablar aktiv olur, bonus almır.
+- **Qeydiyyat təsdiqsizdir** + bir dəfəlik qeydiyyat bonusu (standart 100 virtual AZN, admin dəyişə bilər, yalnız gələcək qeydiyyatlara aiddir). Köhnə "gözləyən" hesablar aktiv olur, bonus almır.
 - **Yeni mənfi balans yaranmır**: oyun, borc ödənişi, hədiyyə və admin çıxılması serverdə yoxlanılır. Köhnə mənfi balanslar silinmir, admin açıq şəkildə düzəldir.
 - **Admin krediti** (təsdiqlə, limitlə, faizsiz, "Borcu ödə"), **oyunçular arası hədiyyə**, **müddətli borc** (qəbuldan sonra köçürmə, vaxtında avtomatik tutulma, qismən ödəniş, "Gecikib" statusu, ardıcıllıq: ən köhnə müddət, sonra kiçik ID).
 - **Profil səhifəsi**, **admin panelində axtarış və bölmələr** (istifadəçilər, kredit, borclar, hədiyyələr), **bildirişlər**.
-- **Demo**: 1 insan + 1–7 bot, hər girişdə 10 000 demo oyun xalı; əsas balansa təsir etmir.
+- **Demo**: 1 insan + 1–7 bot, hər girişdə 10 000 demo AZN; əsas balansa təsir etmir.
 - **Profil şəkli** (JPG/PNG/WebP ≤ 2 MB; serverdə yoxlanılır, kiçildilir, metadata silinir, bazada saxlanılır).
 - **Emoji və çat** — oyunçunun avatarı üzərində 3 saniyəlik balon.
 - **Xal**: saxlanılan 3 kartda 2 Tuz = 22. **Cəkpotlar**: 3×6 və 3 Tuz üçün ayrı məbləğ; 3 Tuz sahibi gizli seçim edir (aç / gizli saxla).
@@ -85,7 +180,7 @@
 | `server/db.js` | Migration sistemi (`schema_migrations`), `db.tx()` atomik tranzaksiyalar (PostgreSQL və SQLite), yeni cədvəllər `rounds`, `round_flows`, `transactions` cədvəlinə yeni sütunlar `kind`, `prev_balance`, `round_uid` |
 | `server/app.js` | **Yeni** (köhnə `index.js`-in yerinə): yeni API-lər `/api/rooms`, `/api/my-stats`, `/api/admin/stats`, `/api/admin/users/:id/reset-negative`; demo istifadəçi üçün məhdudiyyətlər; testlər üçün `createApp()` |
 | `server/index.js` | Yalnız serveri işə salır |
-| `public/app.js` | oyun xalı göstərilməsi, otaq siyahısı, ad/görünmə/şifrə formu, "Kompüterlə oyna", demo lobbisi, kart atma interfeysi, təklif düymələri və cavablar, Baxış izahı, nəticə bölməsi (kartlar və xallar), tam ekran və alternativi, "Nəticələrim", admin "Nəticələr" və "Mənfi balansı sıfırla" |
+| `public/app.js` | AZN göstərilməsi, otaq siyahısı, ad/görünmə/şifrə formu, "Kompüterlə oyna", demo lobbisi, kart atma interfeysi, təklif düymələri və cavablar, Baxış izahı, nəticə bölməsi (kartlar və xallar), tam ekran və alternativi, "Nəticələrim", admin "Nəticələr" və "Mənfi balansı sıfırla" |
 | `public/style.css` | Yeni komponentlərin stilləri, kompakt mobil görünüş, tam ekran alternativi |
 | `public/index.html` | Tam ekran üçün manifest və iPhone meta-teqləri |
 | `public/score.js`, `public/manifest.webmanifest`, `public/icon.svg` | **Yeni**: klientdə xal göstərişi, ana ekrana əlavə etmək üçün manifest və ikon |

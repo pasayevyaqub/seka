@@ -1,8 +1,8 @@
-# Seka — dostlar üçün onlayn kart oyunu
+# Dairə — dostlar üçün onlayn kart oyunu (Seka qaydaları ilə)
 
-Real-time multiplayer Seka oyunudur. İnterfeys Azərbaycan dilindədir və mobil uyğundur. Otaqlar adlı ola bilər, açıq və ya gizli, istəyə görə şifrəli. Bütün məbləğlər **virtual oyun balansıdır** və oyun xalı kimi göstərilir. Real pul yatırma, nağdlaşdırma, faiz və ödəniş sistemi **yoxdur**.
+Saytın görünən adı **Dairə**-dir. Oyunun özü Seka qaydaları ilə oynanılır və oyun daxilində "seka" termini saxlanılıb. Real-time multiplayer oyundur. İnterfeys Azərbaycan dilindədir və mobil uyğundur. Otaqlar adlı ola bilər, açıq və ya gizli, istəyə görə şifrəli. Bütün məbləğlər **virtual oyun balansıdır** və **xal** kimi göstərilir (v2.4-dən əvvəl "AZN" yazılırdı; məbləğlər eynidir). Real pul yatırma, nağdlaşdırma, faiz və ödəniş sistemi **yoxdur**.
 
-Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **2.2.0**.
+Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **2.7.1**.
 
 ## 1. Öz kompüterinizdə işə salmaq
 1. **Node.js** quraşdırın: https://nodejs.org (LTS, minimum 22.13).
@@ -19,7 +19,7 @@ Lokal məlumatlar `data/seka.db` (SQLite) faylında saxlanılır. Testləri iş�
 ## 2. GitHub → Render → Neon quraşdırmasını yeniləmək
 
 > **Yeni mühit dəyişəni lazım deyil.** `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` və `NODE_ENV` olduğu kimi qalır.
-> Baza açılışda avtomatik yenilənir (Migration 4). Mövcud cədvəllərə yalnız yeni sütunlar, bazaya isə yeni cədvəllər əlavə olunur. Heç bir məlumat silinmir. Hesablar, şifrə hash-ləri, balanslar və tarixçə qalır.
+> Baza açılışda avtomatik yenilənir (v2.2 üçün Migration 4, v2.3 üçün Migration 5). Mövcud cədvəllərə yalnız yeni sütunlar, bazaya isə yeni cədvəllər əlavə olunur. Heç bir məlumat silinmir. Hesablar, şifrə hash-ləri, balanslar və tarixçə qalır.
 
 ### A. Ehtiyat nüsxə (tövsiyə olunur)
 Neon panelində **Branches → Create branch** seçin, mənbə `main`, adı məsələn `backup-v2-1`. Problem olsa həmin nüsxəyə qayıtmaq olar.
@@ -30,7 +30,7 @@ Neon panelində **Branches → Create branch** seçin, mənbə `main`, adı məs
 3. `seka` qovluğunun **içindəki** bütün fayl və qovluqları sürükləyib atın: `server`, `public`, `test`, `package.json`, `README.md`, `CHANGELOG.md`, `.gitignore`.
 4. **Commit changes** düyməsini basın.
 
-Eyni adlı fayllar üstünə yazılır. Silinməli köhnə fayl yoxdur. Yeni fayllar: `server/finance.js`, `server/debts.js`, `public/core.js`, `public/room.js`, `public/profile.js`, `public/admin.js` və testlər.
+Eyni adlı fayllar üstünə yazılır. Silinməli köhnə fayl yoxdur. v2.3-də yeni fayllar: `public/giftfx.js`, `public/gifts.js`, `test/table-gifts.test.js` (v2.2-dən gəlirsinizsə). v2.2-də yeni olanlar: `server/finance.js`, `server/debts.js`, `public/core.js`, `public/room.js`, `public/profile.js`, `public/admin.js`, `public/fx.js`, `public/sound.js`, `public/notes.js`, `VISUALS.md`.
 
 ### C. Render
 - Render dəyişikliyi görüb özü deploy edir. Etməsə, **Manual Deploy → Deploy latest commit** seçin.
@@ -39,11 +39,12 @@ Eyni adlı fayllar üstünə yazılır. Silinməli köhnə fayl yoxdur. Yeni fay
 - Deploy loglarında bu sətri görməlisiniz:
   ```
   Migration 4 yoxlanıldı/tətbiq edildi: v2.2: bonus, kredit, hədiyyə, oyunçu borcları, bildirişlər, avatar, idempotency
+  Migration 5 yoxlanıldı/tətbiq edildi: v2.3: masa hədiyyələri (animasiyalı), qiymətlər və alana keçən faiz
   ```
 
 ### D. Neon
 Əlavə ayar lazım deyil.
-- **Yeni cədvəllər:** `op_keys`, `app_settings`, `credit_requests`, `loans`, `loan_payments`, `notifications`.
+- **Yeni cədvəllər:** `op_keys`, `app_settings`, `credit_requests`, `loans`, `loan_payments`, `notifications` (v2.2); `gift_types`, `table_gifts` (v2.3). `app_settings`-ə `gift_share_pct = 30` əlavə olunur. Mövcud cədvəllərə v2.3-də heç nə əlavə olunmur.
 - **`users` cədvəlinə əlavə olunan sütunlar:** `credit_debt`, `credit_limit`, `avatar`, `avatar_ver`.
 - **`transactions` cədvəlinə əlavə olunan sütunlar:** `counterparty_id`, `op_key`, `note`.
 
@@ -55,13 +56,17 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 - Mövcud hesablara başlanğıc bonusu **verilmir**.
 - Köhnə **mənfi balanslar** silinmir və krediti borcuna çevrilmir. Admin onları ayrıca görüb açıq təsdiqlə düzəldə bilər.
 
-## 3. Qeydiyyat və bonus
-- Qeydiyyatdan sonra hesab dərhal aktivdir, admin təsdiqi gözləmək lazım deyil.
-- Yeni hesaba **100 virtual oyun xalı** başlanğıc bonusu verilir:
-  - Bonus qeydiyyatla eyni tranzaksiyada yazılır və hər hesaba yalnız bir dəfə verilir.
-  - Bonus borc və oyun qazancı sayılmır.
-- Admin bonus məbləğini **Admin → Ayarlar** bölməsindən dəyişə bilər. Yeni məbləğ yalnız bundan sonrakı qeydiyyatlara tətbiq olunur.
-- Qeydiyyat sürət məhdudiyyəti: bir IP-dən dəqiqədə 5, saatda 30 qeydiyyat.
+## 3. Giriş, hesablar və bonus
+- **Açıq qeydiyyat bağlıdır.** Ümumi linki (məs. WhatsApp qrupuna) göndərə bilərsiniz — link şifrəsiz giriş vermir; hər kəs öz istifadəçi adı və şifrəsi ilə daxil olur. Birdəfəlik/şifrəsiz dəvət sistemi yoxdur.
+- **Oyunçunu admin yaradır:** Admin → Ayarlar → "Oyunçu əlavə et": görünən ad, unikal istifadəçi adı, ilkin şifrə. Şifrəni oyunçuya şəxsən göndərin. Oyunçu daxil olandan sonra "Profilim → Şifrəni dəyiş" ilə dəyişə bilər.
+- **Başlanğıc bonusu** (Admin → Ayarlar, standart 100 xal) hər yeni hesaba yalnız bir dəfə, hesabla eyni tranzaksiyada yazılır. Mövcud hesablara yenidən verilmir.
+- **Oyunçu girişini aç/bağla** (Admin → Ayarlar):
+  - Açıq: aktiv hesablar istifadəçi adı və şifrə ilə daxil olur.
+  - Bağlı: adi oyunçuların **yeni** girişləri dayanır. Admin (və moderator) həmişə daxil olur. Açıq qeydiyyat hər iki rejimdə bağlıdır.
+  - Bağlamaq artıq daxil olmuş oyunçuları çıxarmır. Kimisə dərhal çıxarmaq üçün həmin hesabı bloklayın — bloklananda sessiyaları və aktiv bağlantıları dərhal etibarsız olur. Admin oyunçunun şifrəsini dəyişəndə də köhnə sessiyalar bağlanır.
+  - Ayar bazada saxlanılır, server yenidən başlayanda qalır.
+- **Son aktiv admin qorunur:** öz statusunu/rolunu dəyişmək olmaz; sonuncu aktiv adminin bloklanmasına və ya rolunun silinməsinə server icazə vermir.
+- Giriş sürət məhdudiyyəti (rate-limit) yaddaşda müvəqqətidir; IP, yer və cihaz məlumatı bazaya yazılmır və heç yerdə göstərilmir.
 
 ## 4. Balans, kredit, hədiyyə, borc
 
@@ -134,6 +139,41 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 - Ayarları dəyişmək, rol vermək və mənfi balansı sıfırlamaq yalnız admin üçündür.
 - Axtarış böyük/kiçik hərfə və Azərbaycan hərflərinə (İ/i, I/ı) uyğun işləyir. Siyahı yenilənəndə axtarış mətni və fokus itmir.
 
+## 5a. Oyunçular arası borc: "Borc istə" və "Borc ver"
+- **Borc istə** (Profilim və ya masada oyunçunun şəklinə toxunub): kimdən, məbləğ, qaytarma vaxtı. Təsdiqlənənə qədər heç kimin balansı və borcu dəyişmir.
+- Borc verən **təsdiqləyəndə** xal onun mövcud balansından sizə keçir və borc eyni tranzaksiyada yaranır. Balans çatmırsa təsdiq alınmır. Təkrar/paralel təsdiq ikinci dəfə işləmir. Rədd etmək və ya (istəyən tərəfindən) geri götürmək mümkündür.
+- **Borc ver** (köhnə yol) da qalır: borc verən təklif edir, borc alan qəbul edir.
+- Qismən və tam qaytarmaq olur. Müddət çatanda qalan borc mövcud balansdan avtomatik tutulur; çatmasa qismən tutulur ("Gecikib"), qalanı sonrakı daxilolmalardan. Mənfi balans və yeni kredit yaranmır. Faiz yoxdur.
+- Profildə qarşı tərəfə görə cəm görünür: "Anara borcum: 100 xal", "Yaqubdan alacağım: 100 xal". Admin krediti ayrıca bölmədədir.
+- Özünə, bota və demo hesabına borc qadağandır.
+
+## 5b. İki nəfər qalanda "Borca oyna"
+Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
+- **Nə vaxt:** raundda yalnız iki aktiv insan oyunçu qalıb, otaq real otaqdır (bot və demo yoxdur), növbəsi olanın balansı növbəti xoda çatmır (və ya o, əvvəl razılaşdırdığı limiti artırmaq istəyir).
+- **Təklif:** "🤝 Borca oyna" — çatışmayan məbləğ, ümumi əlavə risk limiti və qaytarma müddəti (1–30 gün) açıq göstərilir. Qarşı tərəf 30 saniyə ərzində qəbul edir və ya rədd edir. Təklif gözlənərkən növbə taymeri dayanır (sonra ən azı 15 saniyə qalır); bu müddətdə "pas səsi" və vaxt bitməsi işləmir.
+- **Rədd / cavabsızlıq:** balansı (və əvvəlki limiti) xoda çatmayan oyunçu avtomatik pas olur.
+- **Limit özbaşına artmır:** limitdən artıq qoymaq olmaz; artırmaq üçün yeni məbləğə ayrıca təsdiq lazımdır. Təkrar sorğu və ya bağlantının bərpası təklifi ikinci dəfə qəbul etmir (köhnəlmiş məbləğlə gələn qəbul rədd olunur).
+- **Qoyuluş:** əvvəl mövcud real balans, çatmayan hissə təsdiqlənmiş limitdən ("şərti qoyuluş"). Şərti qoyuluş balans kimi heç kimə yazılmır və bankda ayrıca uçotdadır (masada 🧾 zolaqlı "borca" nişanı ilə).
+- **Hədiyyə** yalnız real balansdan göndərilir — şərti limit hədiyyə üçün işləmir.
+- **Hər iki tərəfin balansı çatmırsa:** razılaşma yalnız bir istiqamətdə ola bilər; qarşı tərəf yeni şərti xal yarada bilmir və balansı çatmırsa yalnız pas edə bilər — mövcud bank qorunaraq raund bitir.
+
+**Hesablaşma (mənbə → təyinat), nümunələrlə:**
+1. Yaqub 0 xal, Anar 1 000 xal. Oyun haqqı 10+10 (real bank 20). Anar Yaquba 200-dək borca oynamağı qəbul edir.
+   Yaqub xod 100 (şərti), Anar xod 100 (real), Yaqub baxışır 100 (şərti).
+   - **Yaqub uduzur:** Anar real bankı alır: 10 + 10 + 100 = **120 xal** balansına. Yaqubun 200 şərti qoyuluşu Anara **borc** kimi yazılır ("Borca oyun — otaq X / raund Y"): Yaqubda "Anara borcum: 200 xal", Anarda "Yaqubdan alacağım: 200 xal". Bu 200 xal Anarın balansına indi yazılmır — Yaqub ödəyəndə (və ya müddət çatanda avtomatik) keçir. Beləliklə eyni məbləğ iki dəfə qazanc yazılmır.
+   - **Yaqub udur:** Yaqub yalnız real bankı alır: **120 xal** (Anarın 100 + iki oyun haqqı). Öz 200 şərti qoyuluşu qazanc kimi yaranmır, borc da yaranmır.
+2. **Bankın bölünməsi:** şərti qoyuluş real bankın bölündüyü nisbətlə bağlanır — borclunun öz payı ləğv olur, qarşı tərəfə düşən pay borc yazılır (aşağı yuvarlaqlaşdırma borclunun xeyrinə). Məs. real bank 121 (Yaqub 60, Anar 61), şərti 101 → borc 101×61/121 = 50 xal.
+3. **Seka:** seka başlamazdan əvvəl şərti qoyuluşlar ikiyə bərabər bölünərək bağlanır (yarısı borc, yarısı ləğv); real bank növbəti əlinə keçir; növbəti ələ gizli borc keçmir. Borc raund bitəndə yazılır.
+4. **Ləğv** və ya server restartında bitməmiş raund: real qoyuluşlar mövcud qayda ilə qaytarılır, şərti qoyuluşlar silinir, borc yaranmır. Borc yalnız raundun son paketi bazaya yazılanda, həmin tranzaksiyada yaranır — bağlantı kəsilməsi və restart nəticəni dəyişmir.
+5. Yaranan borc adi oyunçu borcudur: qaytarma, avtomatik tutulma, profil və admin bölmələri eyni işləyir. Mövcud borclar silinmir. Hesablar heç vaxt silinmir (yalnız bloklanır), ona görə alacaq itmir.
+6. "Kimdən udmuşam / kimə uduzmuşam" statistikası yalnız real xal axınlarını sayır.
+
+## 5c. Sekaya qoşulma
+- Qoşulmaq üçün **60 saniyə** verilir (təklifə cavab — 20, "eyni xala baxaq" və bərabər xal qərarı — 30, dörd kartdan birini atmaq — 30 saniyə; hamısı ayrı idarə olunur).
+- Qalan vaxt və "Sekaya qoşul" / "Qoşulmuram" düymələri aydın görünür.
+- Qoşulmaq hüququ olan (balansı çatan, otaqda qalan) oyunçu hələ qərar verməyibsə, əsas oyunçular və botlar sekanı erkən başlada bilməz — server də yoxlayır. Hamı qərar veribsə erkən başlatmaq olar. Vaxt bitəndə seka qoşulanlarla avtomatik davam edir.
+- Qoşulmayanlardan xal tutulmur; təkrar sorğu ikinci dəfə xal çıxarmır.
+
 ## 6. Oyun qaydaları
 - **Kartlar:** 36 kart. 6–9 üzərindəki rəqəm qədər xal verir; 10, Valet, Dama və Karol 10 xal; Tuz 11 xal.
 - **Xal hesablama:**
@@ -171,7 +211,7 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 
 ## 7. Demo, botlar, emoji və çat
 - **Demo:** ayrıca məşq rejimidir.
-  - Hər girişdə 10 000 virtual demo oyun xalı verilir; çıxıb yenidən girəndə qalıq yenə 10 000 olur.
+  - Hər girişdə 10 000 demo xal verilir; çıxıb yenidən girəndə qalıq yenə 10 000 olur.
   - Yalnız botlarla oynanılır. Bot sayını özünüz seçirsiniz: 1–7 bot, otaqda ən çox 8 yer.
   - Əsas balansa, borclara və statistikaya təsir etmir.
 - **Botlar:**
@@ -190,7 +230,7 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 ## 9. Masa, kartlar, animasiya və səs
 - **Masa:** oval yaşıl keçə, taxta və dəri kənar, incə qızılı xətlər, ortada "SEKA" yazısı. Hamısı CSS və SVG ilə ayrıca komponent kimi qurulub — fon şəkli və görünməz düymə yoxdur.
 - **Oturacaqlar:** 2–8 oyunçu masanın ətrafında düzülür. Hər oyunçuda avatar, ad, balans, kartların arxa üzü və banka qoyduğu məbləğ görünür. Növbəsi olan oyunçunun avatarı ətrafında vaxt halqası və saniyə sayğacı var. Sizin yeriniz masanın altındadır: avatarınız, böyük kartlarınız və "N xal" nişanı.
-- **Bank:** masanın ortasında virtual əskinas yığını və dəqiq məbləğ ("Virtual oyun balansı" yazısı ilə). Əskinaslar bu layihə üçün çəkilib, üzərində "VİRTUAL" yazılıb; real pulun surəti deyil.
+- **Bank:** masanın ortasında virtual əskinas yığını və dəqiq məbləğ ("Virtual oyun balansı" yazısı ilə). Əskinaslar bu layihə üçün çəkilib, üzərində "VİRTUAL" yazılıb; real manatın surəti deyil.
 - **Düymələr:** böyük **Pas** (qırmızı), **Baxış** (göy), **Xod** (sarı, məbləğlə). "Seka təklif et" və "Bankı bölək" yalnız 2 oyunçu qalanda görünür və yalnız icazə olanda aktivdir. Gizli 3 Tuz sahibində Pas kilidlidir.
 - **Üst panel:** geri, otağın adı, "N/8 oyunçu · Seka", otaq kodu (kopyalamaq üçün toxunun), "Virtual oyun balansı" və **+** (kredit müraciəti), səs, tam ekran, bildirişlər.
 - **Alt panel:** 😊 emoji, mesaj sahəsi, ☰ çat tarixçəsi və oyun jurnalı.
@@ -200,6 +240,58 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 - **Səslər:** paylama, pul, qələbə və növbə səsi brauzerdə yaradılır (fayl yoxdur). İlk toxunuşdan sonra açılır; 🔊/🔇 düyməsi ilə söndürülür və seçim yadda qalır.
 - **Gizlilik:** rəqibin kartı animasiya üçün belə klientə göndərilmir. Paylama yalnız arxa üzlə göstərilir; kartın üzü yalnız server onu sizə açanda görünür.
 - Bütün vizual faylların mənbəyi və lisenziyası: `VISUALS.md`.
+
+## 8a. Kartlara küncdən baxmaq
+- Öz kartlarınız üzü bağlı gəlir. Kartın **yuxarı küncündən** tutub barmağı (və ya siçanı) diaqonal kartın içinə doğru çəkin — künc qalxır, rəqəm və işarə görünür. Buraxanda kart yenə örtülür.
+- 👁 **Göstər** kartları yalnız sizin ekranınızda açır, **Ört** yenidən bağlayır.
+- Baxmaq xod deyil, növbəni dəyişmir, rəqiblərə heç nə açmır və serverə göndərilmir.
+- 4 kartdan birini atanda: küncdən baxmaq kart seçmir. Atılacaq kartı "At" düyməsi ilə seçib "Seçilmiş kartı at" ilə təsdiqləyin.
+- Azaldılmış hərəkət və ya ☰ → Animasiyalar söndürülübsə: kartı basıb saxlayanda açılır, buraxanda bağlanır.
+- Brauzer yoxlaması (istəyə görə, Playwright lazımdır): `SEKA_URL=http://localhost:3000 SHOTS=/tmp node tools/ui-peek.cjs`.
+- Admin formalarının canlı yenilənmədə qorunması: `SEKA_URL=http://localhost:3000 node tools/ui-admin-morph.cjs` (standart admin/admin123 hesabı ilə işləyən serverdə; 4 test oyunçusu və kredit müraciətləri yaradır — real bazada işə salmayın).
+
+## 9-0. v2.5 masa görünüşü
+- Masa istinad şəklinə uyğundur: oyunçu sayına görə sabit yerlər, qalın dəri kənar, mis bəzəklər, ətrafda bəzəklər (fənər, çay, qoz-fındıq — yalnız görünüş).
+- Otaq adına toxunun → otaq menyusu (bildirişlər, profil, səs, animasiya, çat, jurnal).
+- Oyunçular profilində şəkil yükləyəndə masada öz şəkilləri görünür; yükləməyənlərdə baş hərf, botlarda robot.
+
+## 9-1. v2.4 mobil görünüş
+- Avatarlar masanın içində, kənara yaxın; kartlarınız masanın aşağı kənarının üstündə. Növbəsi olanın avatarında vaxt halqası və "N san".
+- Masa: keçə toxuması, tikişli dəri kənar, mis bəzək, yumşaq kölgə — hamısı CSS/SVG ilə, xarici şəkil yoxdur.
+- Paylama: kartlar göyərtədən sürüşür, öz kartlarınız yerində çevrilir. Paylama və açılma səsləri var; 🔊 ilə söndürülür.
+- İdarə tək sıradadır: [− xal +] · Pas · Baxış · Xod et. Alt sətir: 😊 · mesaj · 🎁 · ☰ (bildirişlər, profil, səs, animasiyalar, çat, jurnal).
+- Bütün məbləğlər "xal" ilə göstərilir (məs. "10 000 xal").
+
+## 9a. Masa hədiyyələri (animasiyalı)
+- **Necə göndərilir:** masada oyunçunun şəklinə toxunun → "Hədiyyə göndər". Hər hədiyyənin qiyməti və alana keçəcək xal əvvəlcədən görünür. Hədiyyəni seçəndə təsdiq pəncərəsi açılır: nə qədər çıxılacaq, alan nə qədər alacaq, nə qədəri dövriyyədən çıxacaq və sizdə nə qədər qalacaq.
+- **Hədiyyələr (başlanğıc qiymətlər):** 🃏 Kart yağışı — 100 xal, 👑 Masa kralı — 300 xal, 🔥 Odlu Tuz — 1 000 xal. Admin qiyməti dəyişə, hədiyyəni aktiv və ya deaktiv edə bilər.
+- **Alana keçən xal:** ilkin olaraq qiymətin 30%-i. Admin faizi 0–100 arasında dəyişə bilər. Nəticə aşağı tam ədədə yuvarlaqlaşdırılır. Qalan hissə heç kimə yazılmır, dövriyyədən çıxır. Məsələn, 1 000 xal çıxılır, alana 300 yazılır, 700 dövriyyədən çıxır.
+- **Xal:** yalnız virtual oyun balansı istifadə olunur (bütün balanslar oyun xalı ilə göstərilir). Real pul yoxdur.
+- **Qadağalar:** özünə, botlara, masada olmayan oyunçuya, demo və botlu otaqlarda göndərmək olmaz. Balans çatmayanda aydın mesaj çıxır və heç nə dəyişmir.
+- **Borclar:** alana gələn xal əvvəlcə onun vaxtı çatmış borclarına tutulur — mövcud avtomatik tutulma qaydası ilə (əvvəl son tarixi köhnə olan, sonra kiçik ID). Bildirişdə hədiyyədən gələn xal, borca tutulan hissə və qalan balans ayrı göstərilir.
+- **Təhlükəsizlik:**
+  - Qiymət, faiz, balans və icazələr serverdə yoxlanılır.
+  - Çıxılma, əlavə, borc tutulması, tarixçə və bildiriş bir tranzaksiyadadır.
+  - Təkrar klik, paralel sorğu və bağlantı təkrarı ikiqat xərc yaratmır (idempotency açarı).
+  - Balans mənfiyə düşmür.
+  - Aktiv raund zamanı balans dəyişikliyi oyunun yaddaşdakı balansına da yazılır (otağın növbəsində).
+- **Animasiyalar:**
+  - **Kart yağışı:** kartlar göndərəndən alana uçur, ətrafa səpələnib yox olur.
+  - **Masa kralı:** qızılı tac alanın avatarına enir, parıldayır, təxminən 3 saniyədən sonra çəkilir.
+  - **Odlu Tuz:** masanın ortasında böyük tuz açılır, alov və qığılcımlar görünür (Canvas), sonra alana tərəf kiçilib yox olur.
+  - Yuxarıda "Yaqub Anara Odlu Tuz göndərdi" bildirişi çıxır.
+- **Animasiya qaydaları:**
+  - Effektlər 2–4 saniyə çəkir, klikləri tutmur və oyunu dayandırmır.
+  - Yalnız uğurlu əməliyyatdan sonra göstərilir. Eyni hadisə iki dəfə oynamır, yenidən qoşulanda köhnə animasiya təkrarlanmır.
+  - Effektlər növbə ilə göstərilir (ən çox 4 gözləyən), köhnəlmiş effekt buraxılır. Bitəndə elementlər, taymerlər və Canvas dövrü təmizlənir.
+- **Söndürmə:** ☰ menyusunda **Səs** və **Animasiyalar** ayrı-ayrı söndürülür, seçim yadda qalır. Sistemdə "hərəkəti azalt" seçilibsə yalnız bildiriş göstərilir.
+- **Tarixçə:** Profildə "Göndərdiyim hədiyyələr" və "Aldığım hədiyyələr" bölmələri var: qarşı tərəf, hədiyyə, tarix, qiymət, faiz və alınan xal. Admin panelində **Masa hədiyyələri** bölməsində göndərən və ya alan adına görə axtarmaq, ayarları dəyişmək olur. Hər əməliyyatın o anki qiyməti və faizi ayrıca saxlanılır — sonrakı dəyişikliklər köhnə qeydlərə təsir etmir.
+- **Statistika:** hədiyyə xalları "kimdən udmuşam / kimə uduzmuşam" statistikasına qarışmır.
+
+## 9b. iPhone-da yazı və klaviatura
+- Ekran artıq hər yenilənmədə bütövlükdə yenidən yaradılmır: kiçik "morph" funksiyası (`public/morph.js`) yalnız dəyişən hissələri yerində yeniləyir. Aktiv input və onun valideynləri DOM-dan çıxarılmır.
+- Yazılan mətn, kursor, seçim, fokus və davam edən yazı kompozisiyası (Azərbaycan hərfləri, telefonun söz təklifləri) qorunur. Fon yenilənmələri fokusu özü vermir — klaviatura öz-özünə açılmır. Klaviatura zamanı məcburi `scrollTo` yoxdur.
+- Yazı zamanı oyun vəziyyəti və taymerlər yenilənməyə davam edir.
 
 ## 10. Tam ekran
 - Otaqda ⤢ düyməsi var. Fullscreen API dəstəklənən brauzerlərdə həqiqi tam ekran açılır.
@@ -213,6 +305,23 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
   - Bağlantı qayıdandan sonra hamısı bir dəfə yazılır.
 - **Server çöksə:** növbəti açılışda yarımçıq raund ləğv edilir və yalnız bazaya yazılmış qoyuluşlar geri qaytarılır.
 
+## 11a. Render Free haqqında
+Render-in pulsuz planında server bir müddət istifadə olunmayanda "yatır". İlk açılış 30–60 saniyə və daha çox gecikə bilər. Bunu kodla tam həll etmək mümkün deyil. Ödənişli plan və ya xarici "oyadıcı" xidmət bu gecikməni azalda bilər.
+
+## 11b. Telefonla yeniləmə: Codespaces → GitHub → Render
+1. ZIP-i telefonda yükləyin və açın (Fayllar tətbiqi ilə).
+2. GitHub-da repository-ni açın → **Add file → Upload files** → `seka` qovluğunun **içindəki** bütün fayl və qovluqları seçin → **Commit changes**. (Codespaces istifadə edirsinizsə: repository → **Code → Codespaces → Create codespace**, faylları sol paneldəki fayl ağacına sürükləyin, sonra **Source Control → Commit → Sync/Push**.)
+3. Render özü deploy edir. Etməsə: Render → servis → **Manual Deploy → Deploy latest commit**.
+4. Logda bu sətri görməlisiniz: `Migration 6 yoxlanıldı/tətbiq edildi`. Yeni mühit dəyişəni, yeni paket və ya Build/Start əmri dəyişikliyi yoxdur.
+5. Brauzerdə saytı açın: başlıqda **Dairə** görünməlidir. Admin ilə daxil olub "Admin → Ayarlar"da oyunçuları yaradın.
+
+## 11c. Linkdəki "seka" hissəsini dəyişmək (istəyə görə)
+Kod Render ünvanını dəyişmir. `xxx-seka.onrender.com` kimi ünvanı dəyişmək üçün:
+1. Render → servis → **Settings → Name**: yeni ad yazın (məs. `daire`). Render alt domeni adla bağlıdırsa, yeni ünvan `daire.onrender.com` (və ya oxşar) olur. Bəzi hallarda alt domen dəyişmir — onda yeni servis yaratmaq lazımdır.
+2. **Yeni servis yolu:** Render → **New → Web Service** → eyni GitHub repository → ad `daire` → eyni Build (`npm install`) və Start (`npm start`) əmrləri → **Environment** bölməsinə köhnə servisdəki `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `NODE_ENV` dəyərlərini eyni ilə köçürün. Baza (Neon) eynidir, ona görə hesablar və balanslar olduğu kimi qalır. Yeni ünvan işləyəndən sonra köhnə servisi dayandırın (eyni anda iki server eyni bazada otaq saxlamasın).
+3. Öz domeniniz varsa: Render → **Settings → Custom Domains** ilə əlavə edin.
+4. Yeni linki WhatsApp qrupuna göndərin. Telefonda "Əsas ekrana əlavə et" ilə yaradılan ikonu yeni ünvandan yenidən əlavə edin.
+
 ## 12. Texniki
 - `server/game/engine.js`: oyun mühərriki — cəkpotlar və gizli 3 Tuz burada.
 - `server/game/cards.js`: xal hesablaması.
@@ -222,5 +331,5 @@ Profil şəkilləri bazada saxlanılır (kiçildilmiş WebP, təxminən 5–20 K
 - `server/rooms.js`: otaqlar; botlar, emoji və çat; oyunla sinxron pul növbəsi.
 - `server/store.js`, `server/db.js`: baza, migration-lar, tranzaksiyalar.
 - `server/app.js`: HTTP API və WebSocket.
-- `public/`: frontend modulları (`core`, `room`, `profile`, `admin`, `app`), kartlar (`cards.js`), virtual əskinaslar (`notes.js`), animasiyalar (`fx.js`), səslər (`sound.js`) və xal (`score.js`).
+- `public/`: frontend modulları (`core`, `room`, `profile`, `admin`, `app`, DOM yeniləməsi `morph`, kartın küncündən baxma `peek`, bəzəklər `decor`, hədiyyə pəncərəsi `gifts`, hədiyyə animasiyaları `giftfx`), kartlar (`cards.js`), virtual əskinaslar (`notes.js`), animasiyalar (`fx.js`), səslər (`sound.js`) və xal (`score.js`).
 - Testlər `test/` qovluğundadır. Hamısını işə salmaq üçün: `npm test`. PostgreSQL üzərində: `TEST_DATABASE_URL=postgres://... npm test` (`batch`, `finance`, `integration` və `money-integration` faylları).

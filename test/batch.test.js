@@ -199,7 +199,12 @@ test('v1 bazasından migration: hesablar, şifrə hash-ləri, balanslar, tarixç
   const tx = await db.all('SELECT delta, balance_after, reason, kind FROM transactions ORDER BY id');
   assert.deepEqual(tx.map((t) => [Number(t.delta), Number(t.balance_after), t.reason, t.kind ?? null]), [[30, 30, 'Admin: əlavə', null], [-100, -70, 'Xod', null]]);
   const migs = (await db.all('SELECT id FROM schema_migrations ORDER BY id')).map((m) => Number(m.id));
-  assert.deepEqual(migs, [1, 2, 3, 4]);
+  assert.deepEqual(migs, [1, 2, 3, 4, 5, 6]);
+  assert.equal((await db.get(`SELECT value FROM app_settings WHERE key = 'player_login_open'`)).value, '1');
+  // Migration 5: masa hədiyyələri — ilkin qiymətlər və 30%, mövcud balanslara toxunulmur
+  assert.deepEqual((await db.all('SELECT id, price, active FROM gift_types ORDER BY sort')).map((g) => [g.id, Number(g.price), Number(g.active)]), [['card_rain', 100, 1], ['table_king', 300, 1], ['fire_ace', 1000, 1]]);
+  assert.equal((await db.get(`SELECT value FROM app_settings WHERE key = 'gift_share_pct'`)).value, '30');
+  assert.equal(Number((await db.get('SELECT COUNT(*) AS n FROM table_gifts')).n), 0);
   assert.equal(Number((await db.get("SELECT COUNT(*) AS n FROM transactions WHERE kind = 'bonus'")).n), 0);
   // ensureAdmin mövcud admini dəyişmir
   await store.ensureAdmin('admin', 'basqa');

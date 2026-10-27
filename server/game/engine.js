@@ -3,7 +3,7 @@
 import { newDeck, shuffle, handScore, jackpotKind, cardLabel } from './cards.js';
 
 export const DEFAULT_SETTINGS = {
-  ante: 10,          // oyun haqqı (oyun xalı)
+  ante: 10,          // oyun haqqı (xal)
   minBet: 10,        // minimum xod
   maxBet: 0,         // maksimum xod (0 = limitsiz)
   jackpotSix: 0,     // 3 dənə 6: hər rəqibdən tutulan məbləğ
@@ -15,9 +15,14 @@ export const DEFAULT_SETTINGS = {
 export const TIMING = {
   OFFER_MS: 20_000,      // Seka / bölmə təklifinə cavab vaxtı (növbə vaxtından çox ola bilməz)
   MIN_OFFER_MS: 5_000,   // növbədən bu qədərdən az vaxt qalıbsa təklif göndərmək olmaz
-  DECISION_MS: 30_000,   // "eyni xala baxaq" cavabı, bərabər xal qərarı, sekaya qoşulma
-  DISCARD_MS: 30_000,    // sekada kart atma vaxtı
+  DECISION_MS: 30_000,   // "eyni xala baxaq" cavabı, bərabər xal qərarı
+  SEKA_JOIN_MS: 60_000,  // sekaya qoşulma vaxtı (ayrıca)
+  DISCARD_MS: 30_000,    // sekada 4 kartdan birini atma vaxtı (ayrıca)
+  CREDIT_OFFER_MS: 30_000, // "Borca oyna" təklifinə cavab vaxtı
+  CREDIT_MIN_RESUME_MS: 15_000, // təklifdən sonra borclunun növbəsinə ən azı bu qədər vaxt qalır
 };
+export const CREDIT_MAX_LIMIT = 1_000_000;
+const DAY_MS = 86_400_000;
 
 export class GameError extends Error {}
 
@@ -37,7 +42,13 @@ export class Round {
     this.dealer = dealer;
     this.version = 0;
     this.pot = 0;
-    this.contrib = {};          // id → banka qoyduğu cəmi (seka daxil)
+    this.contrib = {};          // id → banka REAL balansdan qoyduğu cəmi (seka daxil)
+    // "Borca oyna": şərti (təminatsız) qoyuluşlar ayrıca uçotdadır — balans kimi heç kimə yazılmır
+    this.creditPot = 0;         // bankdakı şərti qoyuluşların cəmi
+    this.creditContrib = {};    // id → şərti qoyuluş
+    this.creditDeal = null;     // {debtor, creditor, limit, used, dueDays}
+    this.creditLoans = [];      // raund bitəndə yaranan borclar: {borrower, lender, amount, dueDays}
+    this.allowCredit = false;   // otaq təyin edir: yalnız real (botsuz, demo olmayan) otaqda
     this.jackpotFlows = [];     // cəkpot ödənişləri (birbaşa)
     this.jackpots = [];         // açılmış cəkpotlar: {holder, kind, declared, payments:[{from, paid}]}
     this.secretAce = null;      // gizli 3 Tuz: {holder, decided, hidden} — yalnız sahibinə görünür
@@ -63,18 +74,65 @@ export class Round {
   name(id) { return this.players.get(id)?.name ?? '?'; }
   say(msg) { this.log.push({ t: Date.now(), msg }); if (this.log.length > 200) this.log.shift(); }
 
-  // Balans heç vaxt 0-dan aşağı düşmür
-  canAfford(id, amount) {
+  // Balans heç vaxt 0-dan aşağı düşmür. Borca oyun razılaşması varsa borclu üçün qalan limit də nəzərə alınır.
+  creditLeft(id) {
+    const d = this.creditDeal;
+    return d && d.debtor === id ? Math.max(0, d.limit - d.used) : 0;
+  }
+  available(id) {
     const p = this.players.get(id);
-    return !!p && p.balance >= amount;
+    return p ? Math.max(0, p.balance) + this.creditLeft(id) : 0;
+  }
+  canAfford(id, amount) {
+    return !!this.players.get(id) && this.available(id) >= amount;
   }
 
-  debitToPot(id, amount, reason) {
+  // Qoyuluş: əvvəl real balans, çatmayan hissə təsdiqlənmiş şərti limitdən (yalnız xod/baxışda)
+  debitToPot(id, amount, reason, allowCredit = false) {
     if (amount <= 0) return;
-    this.players.get(id).balance -= amount;
-    this.pot += amount;
-    this.contrib[id] = (this.contrib[id] || 0) + amount;
-    this.effects.push({ userId: id, delta: -amount, reason });
+    const p = this.players.get(id);
+    const real = Math.min(amount, Math.max(0, p.balance));
+    const cred = amount - real;
+    if (cred > 0) {
+      if (!allowCredit || this.creditLeft(id) < cred) throw new GameError('Balans limiti buna icazə vermir.');
+      this.creditDeal.used += cred;
+      this.creditPot += cred;
+      this.creditContrib[id] = (this.creditContrib[id] || 0) + cred;
+    }
+    if (real > 0) {
+      p.balance -= real;
+      this.pot += real;
+      this.contrib[id] = (this.contrib[id] || 0) + real;
+      this.effects.push({ userId: id, delta: -real, reason });
+    }
+  }
+
+  /**
+   * Şərti qoyuluşları bağlayır. shares: {id: pay} — bankın kimə hansı payla düşdüyü (real bankdakı nisbət).
+   * Borclunun şərti qoyuluşu qaliblər arasında eyni nisbətlə bölünür: borclunun öz payı ləğv olur (yeni xal yaranmır),
+   * başqa qalibə düşən pay isə borc kimi qeydə alınır (balansa indi yazılmır). Yuvarlaqlaşdırma aşağı — borclunun xeyrinə.
+   */
+  settleCredit(shares, label) {
+    const d = this.creditDeal;
+    if (!this.creditPot || !d) { this.creditPot = 0; this.creditContrib = {}; return []; }
+    const total = Object.values(shares).reduce((a, b) => a + b, 0);
+    const ids = Object.keys(shares);
+    const loans = [];
+    for (const k of ids) {
+      const id = this.order.find((x) => String(x) === k) ?? Number(k);
+      if (id === d.debtor) continue;
+      const amount = total > 0 ? Math.floor((this.creditPot * shares[k]) / total) : Math.floor(this.creditPot / ids.length);
+      if (amount > 0) {
+        loans.push({ borrower: d.debtor, lender: id, amount, dueDays: d.dueDays });
+        this.say(`Borca oyun: ${this.name(d.debtor)} → ${this.name(id)} ${amount} xal borc yazıldı (${label}).`);
+      }
+    }
+    if (!loans.length) this.say(`Borca oyun: ${this.name(d.debtor)} borc yaranmadı (${label}).`);
+    this.creditLoans.push(...loans);
+    this.creditPot = 0;
+    this.creditContrib = {};
+    this.creditDeal = null;
+    return loans;
   }
 
   transfer(fromId, toId, amount, reason) {
@@ -134,11 +192,11 @@ export class Round {
   start(now) {
     const ante = this.settings.ante;
     const ids = this.order.filter((id) => this.canAfford(id, ante));
-    for (const id of this.order) if (!ids.includes(id)) this.say(`${this.name(id)} — balans oyun haqqına (${ante} oyun xalı) çatmır, bu raundda iştirak etmir.`);
+    for (const id of this.order) if (!ids.includes(id)) this.say(`${this.name(id)} — balans oyun haqqına (${ante} xal) çatmır, bu raundda iştirak etmir.`);
     if (ids.length < 2) throw new GameError('Raund üçün balansı oyun haqqına çatan ən azı 2 oyunçu lazımdır.');
     this.order = ids;
     for (const id of ids) this.debitToPot(id, ante, 'Oyun haqqı');
-    this.say(`Yeni raund. Hər oyunçu ${ante} oyun xalı oyun haqqı qoydu.`);
+    this.say(`Yeni raund. Hər oyunçu ${ante} xal oyun haqqı qoydu.`);
     this.newHand(ids, false, now);
   }
 
@@ -201,6 +259,7 @@ export class Round {
     this.turnDeadline = now + this.settings.turnSeconds * 1000;
     this.votes = new Set();
     this.offerUsed = false;
+    this.creditOffersThisTurn = 0;
     // gizli 3 Tuz sahibi pas edə bilmədiyi üçün xoda balansı çatmırsa cəkpot avtomatik açılır
     if (this.isSecretHolder(id) && !this.canAfford(id, this.minXod())) this.openSecretAce('balans xoda çatmadı');
   }
@@ -233,7 +292,7 @@ export class Round {
         payments.push({ from: o, name: this.name(o), declared, paid });
       }
       this.jackpots.push({ holder: h, name: this.name(h), kind, declared, payments, total: payments.reduce((s, x) => s + x.paid, 0) });
-      this.say(`🎉 CƏKPOT (${kind === 'ace' ? '3 Tuz' : '3 dənə 6'})! ${this.name(h)}: ${this.ps[h].cards.map(cardLabel).join(' ')} — rəqiblərdən cəmi ${payments.reduce((s, x) => s + x.paid, 0)} oyun xalı`);
+      this.say(`🎉 CƏKPOT (${kind === 'ace' ? '3 Tuz' : '3 dənə 6'})! ${this.name(h)}: ${this.ps[h].cards.map(cardLabel).join(' ')} — rəqiblərdən cəmi ${payments.reduce((s, x) => s + x.paid, 0)} xal`);
     }
     return this.finish(holders.map((h) => [h]), 'jackpot', holders);
   }
@@ -332,6 +391,11 @@ export class Round {
       this.credit(key, amt, groups.flat().length > 1 ? 'Bank bölündü' : 'Bank udu');
     }
     const winners = groups.flat();
+    // şərti qoyuluşlar real bankın bölündüyü nisbətlə bağlanır (bax settleCredit)
+    const shares = {};
+    if (pot > 0) Object.assign(shares, payouts);
+    else for (const g of groups) for (const id of g) shares[id] = 1;
+    this.settleCredit(shares, { last: 'qalib', compare: 'baxışma', split: 'bank bölündü', jackpot: 'cəkpot' }[how] || how);
     this.pot = 0;
     this.phase = 'finished';
     this.turn = null;
@@ -339,8 +403,8 @@ export class Round {
     const shown = shownIds.filter((id) => this.ps[id]?.cards).map((id) => ({
       id, name: this.name(id), cards: this.ps[id].cards, score: handScore(this.ps[id].cards),
     }));
-    this.result = { winners, payouts, how, shown, jackpots: this.jackpots, flows: this.computeFlows(payouts) };
-    const names = winners.map((id) => `${this.name(id)} (+${payouts[id]} oyun xalı)`).join(', ');
+    this.result = { winners, payouts, how, shown, jackpots: this.jackpots, flows: this.computeFlows(payouts), creditLoans: this.creditLoans };
+    const names = winners.map((id) => `${this.name(id)} (+${payouts[id]} xal)`).join(', ');
     this.say(winners.length > 1 ? `Bank bölündü: ${names}` : `Qalib: ${names}`);
   }
 
@@ -393,23 +457,28 @@ export class Round {
       this.credit(key, amt, reason);
     }
     this.pot = 0;
+    // istifadə olunmamış və yekunlaşmamış şərti borc silinir (borc yaranmır)
+    if (this.creditPot) this.say('Raund ləğv edildi — şərti (borca) qoyuluşlar silindi, borc yaranmadı.');
+    this.creditPot = 0; this.creditContrib = {}; this.creditDeal = null; this.creditLoans = [];
     this.phase = 'finished';
     this.turn = null;
     this.pending = null;
     this.secretAce = null;
-    this.result = { winners: [], payouts: {}, how: 'aborted', shown: [], jackpots: [], flows: [] };
+    this.result = { winners: [], payouts: {}, how: 'aborted', shown: [], jackpots: [], flows: [], creditLoans: [] };
     this.say('Raund ləğv edildi, pullar qaytarıldı.');
     this.version++;
   }
 
   startSekaJoin(a, b, now) {
     if (this.secretAce) return this.openSecretAce('seka qərarı');
+    // bərabər nəticə: şərti qoyuluşlar sekadan ƏVVƏL bağlanır (iki tərəf arasında bərabər) — növbəti raunda gizli borc keçmir
+    if (this.creditPot) this.settleCredit({ [a]: 1, [b]: 1 }, 'seka');
     const eligible = this.participants().filter((id) => id !== a && id !== b && !this.left.has(id));
     this.phase = 'sekaJoin';
     this.pending = null;
     this.turn = null;
-    this.sekaJoin = { base: [a, b], eligible, joined: [], cost: this.settings.ante * 2, deadline: now + TIMING.DECISION_MS };
-    this.say(`SEKA! Bank (${this.pot} oyun xalı) növbəti raunda keçir. Qoşulmaq üçün: ${this.sekaJoin.cost} oyun xalı.`);
+    this.sekaJoin = { base: [a, b], eligible, joined: [], skipped: [], cost: this.settings.ante * 2, deadline: now + TIMING.SEKA_JOIN_MS };
+    this.say(`SEKA! Bank (${this.pot} xal) növbəti raunda keçir. Qoşulmaq üçün: ${this.sekaJoin.cost} xal.`);
   }
 
   startSekaHand(now) {
@@ -419,6 +488,13 @@ export class Round {
     if (ids.length === 1) { this.sekaJoin = null; return this.finish([[ids[0]]], 'last'); }
     this.say(`Seka raundu başladı: ${ids.map((i) => this.name(i)).join(', ')}. Hər kəsə 4 kart.`);
     this.newHand(ids, true, now);
+  }
+
+  // Qoşulmaq hüququ olan, hələ qərar verməmiş oyunçular (balansı çatan, otaqda qalan)
+  sekaWaiting() {
+    const sj = this.sekaJoin;
+    if (!sj) return [];
+    return sj.eligible.filter((id) => !sj.joined.includes(id) && !(sj.skipped || []).includes(id) && !this.left.has(id) && this.canAfford(id, sj.cost));
   }
 
   allDiscarded() { return this.active().every((id) => this.ps[id].cards); }
@@ -448,14 +524,14 @@ export class Round {
         this.mustTurn(id);
         const min = this.minXod();
         const amount = Math.floor(Number(action.amount));
-        if (!Number.isFinite(amount) || amount < min) throw new GameError(`Minimum xod: ${min} oyun xalı`);
+        if (!Number.isFinite(amount) || amount < min) throw new GameError(`Minimum xod: ${min} xal`);
         const max = this.settings.maxBet;
-        if (max > 0 && amount > Math.max(max, min)) throw new GameError(`Maksimum xod: ${Math.max(max, min)} oyun xalı`);
+        if (max > 0 && amount > Math.max(max, min)) throw new GameError(`Maksimum xod: ${Math.max(max, min)} xal`);
         if (!this.canAfford(id, amount)) throw new GameError('Balans limiti buna icazə vermir.');
-        this.debitToPot(id, amount, 'Xod');
+        this.debitToPot(id, amount, 'Xod', true);
         me.acted = true;
         this.currentBet = amount;
-        this.say(`${this.name(id)}: xod ${amount} oyun xalı`);
+        this.say(`${this.name(id)}: xod ${amount} xal`);
         return this.advance(id, now);
       }
       case 'pas': {
@@ -472,9 +548,9 @@ export class Round {
         if (!target || target === id) throw new GameError('Baxışmaq üçün rəqib yoxdur.');
         const cost = this.minXod();
         if (!this.canAfford(id, cost)) throw new GameError('Balans limiti buna icazə vermir.');
-        this.debitToPot(id, cost, 'Baxışma');
+        this.debitToPot(id, cost, 'Baxışma', true);
         me.acted = true;
-        this.say(`${this.name(id)} ${this.name(target)} ilə baxışır (${cost} oyun xalı).`);
+        this.say(`${this.name(id)} ${this.name(target)} ilə baxışır (${cost} xal).`);
         if (action.tieOffer && this.active().length > 2) {
           this.phase = 'tieOffer';
           this.pending = { type: 'tieOffer', c: id, o: target, deadline: now + TIMING.DECISION_MS };
@@ -530,15 +606,59 @@ export class Round {
         const sj = this.sekaJoin;
         if (this.phase !== 'sekaJoin' || !sj.eligible.includes(id)) throw new GameError('Sekaya qoşula bilməzsiniz.');
         if (sj.joined.includes(id)) throw new GameError('Artıq qoşulmusunuz.');
+        if ((sj.skipped || []).includes(id)) throw new GameError('Qoşulmayacağınızı bildirmisiniz.');
         if (!this.canAfford(id, sj.cost)) throw new GameError('Balans limiti buna icazə vermir.');
         this.debitToPot(id, sj.cost, 'Sekaya qoşulma');
         sj.joined.push(id);
-        this.say(`${this.name(id)} sekaya qoşuldu (${sj.cost} oyun xalı).`);
+        this.say(`${this.name(id)} sekaya qoşuldu (${sj.cost} xal).`);
+        return;
+      }
+      case 'sekaSkip': {
+        const sj = this.sekaJoin;
+        if (this.phase !== 'sekaJoin' || !sj.eligible.includes(id) || sj.joined.includes(id)) throw new GameError('Sizdən cavab gözlənilmir.');
+        if (!sj.skipped.includes(id)) { sj.skipped.push(id); this.say(`${this.name(id)} sekaya qoşulmur.`); }
         return;
       }
       case 'sekaStart': {
         if (this.phase !== 'sekaJoin' || !this.sekaJoin.base.includes(id)) throw new GameError('Sekanı yalnız əsas iki oyunçu başlada bilər.');
+        const waiting = this.sekaWaiting();
+        if (waiting.length) throw new GameError(`Qoşulma vaxtı bitməyib: ${waiting.map((x) => this.name(x)).join(', ')} hələ qərar verməyib.`);
         return this.startSekaHand(now);
+      }
+      // ---------- "Borca oyna" (yalnız iki aktiv insan oyunçu qalanda) ----------
+      case 'creditOffer': {
+        this.mustTurn(id);
+        if (!this.allowCredit) throw new GameError('Borca oyun yalnız real otaqda (botsuz, demo olmayan) mümkündür.');
+        const act = this.active();
+        if (act.length !== 2 || act.some((x) => x < 0)) throw new GameError('Borca oyun yalnız iki aktiv oyunçu qalanda mümkündür.');
+        const to = act.find((x) => x !== id);
+        const d = this.creditDeal;
+        if (d && d.debtor !== id) throw new GameError('Bu raundda borca oyun razılaşması artıq qarşı tərəf üçündür.');
+        if (this.isSecretHolder(id)) throw new GameError('İndi borca oyun təklif etmək olmaz.');
+        if ((this.creditOffersThisTurn || 0) >= 2) throw new GameError('Bu növbədə təklif limiti bitib.');
+        const limit = Math.floor(Number(action.limit));
+        const dueDays = Math.floor(Number(action.dueDays ?? 7));
+        if (!Number.isFinite(limit) || limit < 1 || limit > CREDIT_MAX_LIMIT) throw new GameError('Limit müsbət tam ədəd olmalıdır.');
+        if (!Number.isInteger(dueDays) || dueDays < 1 || dueDays > 30) throw new GameError('Qaytarma müddəti 1–30 gün olmalıdır.');
+        if (d && limit <= d.limit) throw new GameError(`Yeni limit mövcud limitdən (${d.limit} xal) böyük olmalıdır.`);
+        const used = d ? d.used : 0;
+        if (limit <= used) throw new GameError('Limit artıq istifadə olunan məbləğdən böyük olmalıdır.');
+        const shortfall = Math.max(0, this.minXod() - Math.max(0, this.players.get(id).balance) - (d ? d.limit - d.used : 0));
+        if (!d && shortfall <= 0) throw new GameError('Balansınız xoda çatır — borca oynamağa ehtiyac yoxdur.');
+        if (limit - used < shortfall) throw new GameError(`Limit ən azı çatışmayan məbləğ qədər olmalıdır (${shortfall + used} xal).`);
+        this.creditOffersThisTurn = (this.creditOffersThisTurn || 0) + 1;
+        this.phase = 'creditOffer';
+        this.pending = { type: 'creditOffer', from: id, to, limit, prevLimit: d ? d.limit : 0, used, shortfall, dueDays,
+          deadline: now + TIMING.CREDIT_OFFER_MS, turnLeft: Math.max(0, this.turnDeadline - now) };
+        this.say(`${this.name(id)} ${this.name(to)}-a "borca oyna" təklif edir: ${limit} xala qədər${d ? ` (əvvəlki limit ${d.limit})` : ''}, qaytarma ${dueDays} gün.`);
+        return;
+      }
+      case 'creditAccept':
+      case 'creditDecline': {
+        const p = this.pending;
+        if (this.phase !== 'creditOffer' || !p || p.to !== id) throw new GameError('Sizdən cavab gözlənilmir.');
+        if (t === 'creditAccept' && Number(action.limit) !== p.limit) throw new GameError('Təklifin məbləği dəyişib — yenidən baxın.');
+        return this.endCreditOffer(t === 'creditAccept', now, false);
       }
       case 'discard': {
         if (this.phase !== 'discard') throw new GameError('İndi kart atmaq olmaz.');
@@ -591,6 +711,27 @@ export class Round {
     this.pending = null;
   }
 
+  endCreditOffer(ok, now, timeout) {
+    const p = this.pending;
+    this.phase = 'betting';
+    this.pending = null;
+    // növbə taymeri təklif müddətində dayanmışdı — qalan vaxtla davam edir
+    this.turnDeadline = now + Math.max(p.turnLeft, TIMING.CREDIT_MIN_RESUME_MS);
+    if (ok) {
+      const d = this.creditDeal;
+      if (d) { d.limit = p.limit; d.dueDays = p.dueDays; } else this.creditDeal = { debtor: p.from, creditor: p.to, limit: p.limit, used: 0, dueDays: p.dueDays };
+      this.say(`${this.name(p.to)} qəbul etdi: ${this.name(p.from)} ${p.limit} xala qədər borca oynaya bilər (istifadə olunan hissə uduzanda borc yazılır).`);
+      return;
+    }
+    this.say(timeout ? `${this.name(p.to)} 30 saniyədə cavab vermədi — borca oyun təklifi rədd sayılır.` : `${this.name(p.to)} borca oyun təklifini rədd etdi.`);
+    // balansı (və əvvəl razılaşdırılmış limiti) xoda çatmırsa — avtomatik pas
+    if (!this.canAfford(p.from, this.minXod()) && this.ps[p.from]?.status === 'active') {
+      this.ps[p.from].status = 'folded';
+      this.say(`${this.name(p.from)} balansı çatmadığı üçün avtomatik pas oldu.`);
+      return this.advance(p.from, now);
+    }
+  }
+
   mustTurn(id) {
     if (this.phase !== 'betting') throw new GameError('İndi xod etmək olmaz.');
     if (this.turn !== id) throw new GameError('Növbə sizdə deyil.');
@@ -613,6 +754,7 @@ export class Round {
     // gizli cəkpot sahibinin növbə vaxtı bitdi → cəkpot açılır (oyun kilidlənmir)
     if (this.phase === 'betting' && this.isSecretHolder(this.turn) && now >= this.turnDeadline) { this.openSecretAce('növbə vaxtı bitdi'); return true; }
     if (this.phase === 'offer' && now >= this.pending.deadline) { this.endOffer(true); return true; }
+    if (this.phase === 'creditOffer' && now >= this.pending.deadline) { this.endCreditOffer(false, now, true); return true; }
     if (this.phase === 'tieOffer' && now >= this.pending.deadline) {
       const { c, o } = this.pending;
       this.say(`${this.name(o)} vaxtında cavab vermədi — təklif rədd sayılır.`);
@@ -625,7 +767,7 @@ export class Round {
       this.decideTie(now);
       return true;
     }
-    if (this.phase === 'sekaJoin' && now >= this.sekaJoin.deadline) { this.startSekaHand(now); return true; }
+    if (this.phase === 'sekaJoin' && now >= this.sekaJoin.deadline) { this.say('Qoşulma vaxtı bitdi — seka qoşulanlarla davam edir.'); this.startSekaHand(now); return true; }
     if (this.phase === 'discard' && now >= this.discardDeadline) {
       for (const id of this.active()) if (!this.ps[id].cards) this.doDiscard(id, this.ps[id].hand.length - 1, true);
       this.afterDeal(now);
@@ -663,7 +805,7 @@ export class Round {
       const p = this.pending;
       return this.finish([[p.a === id ? p.b : p.a]], 'last');
     }
-    if (this.phase === 'offer' || this.phase === 'tieOffer') {
+    if (this.phase === 'offer' || this.phase === 'tieOffer' || this.phase === 'creditOffer') {
       this.phase = 'betting';
       this.pending = null;
       if (this.turn === id || this.active().length <= 1) return this.advance(id, now);
@@ -688,7 +830,8 @@ export class Round {
         status: p ? p.status : 'out',
         attachedTo: p?.attachedTo ?? null,
         cardCount: p ? (p.cards ? p.cards.length : p.hand.length) : 0,
-        put: this.contrib[id] || 0, // banka qoyduğu cəmi (hamıya açıq məlumat — masada pul görünür)
+        put: this.contrib[id] || 0, // banka REAL balansdan qoyduğu cəmi (hamıya açıq məlumat — masada pul görünür)
+        creditPut: this.creditContrib[id] || 0, // şərti (borca) qoyuluş — ayrıca nişanla göstərilir
         discarded: !!(p && p.cards && this.isSeka),
         cards: visible ? p.cards : null,
         score: visible ? handScore(p.cards) : null,
@@ -716,6 +859,13 @@ export class Round {
         canVote: overdue && mine.status === 'active' && this.turn !== uid && !this.votes.has(uid),
         canPas: isTurn && !this.isSecretHolder(uid),
         canAffordMin: this.canAfford(uid, this.minXod()),
+        available: this.available(uid),
+        creditLeft: this.creditLeft(uid),
+        creditShortfall: Math.max(0, this.minXod() - this.available(uid)),
+        // borca oyun təklifi: növbə məndə, iki aktiv insan, real otaq, qarşı tərəf borclu deyil
+        canCreditOffer: isTurn && this.allowCredit && activeCount === 2 && this.active().every((x) => x > 0)
+          && !(this.creditDeal && this.creditDeal.debtor !== uid) && !this.isSecretHolder(uid) && (this.creditOffersThisTurn || 0) < 2
+          && (!!this.creditDeal || !this.canAfford(uid, this.minXod())),
         // gizli 3 Tuz — YALNIZ sahibinin görünüşündə
         secretJackpot: this.isSecretHolder(uid) ? { kind: 'ace', decided: this.secretAce.decided, amount: this.jackpotAmount('ace') } : null,
       };
@@ -748,7 +898,9 @@ export class Round {
       votes: this.votes.size,
       votesNeeded: Math.ceil((activeCount - 1) / 2),
       pending,
-      sekaJoin: this.sekaJoin,
+      sekaJoin: this.sekaJoin ? { ...this.sekaJoin, waiting: this.sekaWaiting() } : null,
+      creditPot: this.creditPot,
+      creditDeal: this.creditDeal ? { ...this.creditDeal } : null,
       result,
       log: this.log.slice(-40),
     };

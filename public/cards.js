@@ -144,22 +144,35 @@ export function cardSVG(c, cls = '') {
   </svg>`;
 }
 
-// Arxa üz: ağ haşiyə, tünd yaşıl sahə, simmetrik bəzəkli naxış və mərkəzi medalyon (orijinal çəkilib)
+// Arxa üz: qızılı haşiyə, tünd yaşıl sahə, səkkizguşəli ulduz medalyonu və künc bəzəkləri (orijinal çəkilib)
+function star8(cx, cy, r1, r2) {
+  let d = '';
+  for (let k = 0; k < 16; k++) {
+    const a = (Math.PI / 8) * k - Math.PI / 2;
+    const r = k % 2 ? r2 : r1;
+    d += `${k ? 'L' : 'M'}${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)} `;
+  }
+  return d + 'Z';
+}
+const STAR_OUT = star8(50, 70, 21, 13);
+const STAR_IN = star8(50, 70, 12, 7.5);
 export function cardBackSVG(cls = '') {
   return `<svg class="card back ${cls}" viewBox="0 0 100 140" aria-label="kart">
-    <rect x="0.75" y="0.75" width="98.5" height="138.5" rx="8" fill="#ffffff" stroke="#bdb8ad" stroke-width="1.2"/>
-    <rect x="6" y="6" width="88" height="128" rx="3" fill="#1d5b3f"/>
-    <rect x="6" y="6" width="88" height="128" rx="3" fill="url(#backPattern)"/>
-    <rect x="9" y="9" width="82" height="122" rx="2" fill="none" stroke="#dfe7e1" stroke-width="0.8"/>
-    <rect x="11" y="11" width="78" height="118" rx="2" fill="none" stroke="#dfe7e1" stroke-width="0.4" stroke-dasharray="1 1.5"/>
-    <use href="#backOrnament"/>
-    <use href="#backOrnament" transform="rotate(180 50 70)"/>
-    <use href="#backOrnament" transform="translate(100 0) scale(-1 1)"/>
-    <use href="#backOrnament" transform="translate(0 140) scale(1 -1)"/>
-    <circle cx="50" cy="70" r="13" fill="#1d5b3f" stroke="#dfe7e1" stroke-width="1"/>
-    <circle cx="50" cy="70" r="10" fill="none" stroke="#dfe7e1" stroke-width="0.5" stroke-dasharray="1 1"/>
-    <path d="M50 60 L52 68 L60 70 L52 72 L50 80 L48 72 L40 70 L48 68 Z" fill="#dfe7e1"/>
-    <circle cx="50" cy="70" r="2" fill="#1d5b3f"/>
+    <rect x="0.75" y="0.75" width="98.5" height="138.5" rx="8" fill="#e9d79c" stroke="#8a6a24" stroke-width="1.2"/>
+    <rect x="4" y="4" width="92" height="132" rx="5.5" fill="#174a32"/>
+    <rect x="4" y="4" width="92" height="132" rx="5.5" fill="url(#backPattern)" opacity=".55"/>
+    <rect x="8" y="8" width="84" height="124" rx="3.5" fill="none" stroke="#d9b75e" stroke-width="1.6"/>
+    <rect x="11" y="11" width="78" height="118" rx="2.5" fill="none" stroke="#d9b75e" stroke-width=".6" stroke-dasharray="1.2 1.4"/>
+    <g fill="#d9b75e">
+      <path d="M11 11 l9 0 q-6 3 -9 9 z"/><path d="M89 11 l-9 0 q6 3 9 9 z"/><path d="M11 129 l9 0 q-6 -3 -9 -9 z"/><path d="M89 129 l-9 0 q6 -3 9 -9 z"/>
+      <path d="M50 16 l3 5 l-3 5 l-3 -5 z"/><path d="M50 114 l3 5 l-3 5 l-3 -5 z"/>
+    </g>
+    <circle cx="50" cy="70" r="27" fill="#123d29" stroke="#d9b75e" stroke-width="1.4"/>
+    <circle cx="50" cy="70" r="24" fill="none" stroke="#d9b75e" stroke-width=".6" stroke-dasharray="1 1.3"/>
+    <path d="${STAR_OUT}" fill="none" stroke="#e8c96f" stroke-width="1.4"/>
+    <path d="${STAR_IN}" fill="#d9b75e" opacity=".9"/>
+    <circle cx="50" cy="70" r="3.2" fill="#123d29" stroke="#f2dc95" stroke-width=".8"/>
+    <path d="M50 30 Q60 40 50 43 Q40 40 50 30 Z M50 110 Q60 100 50 97 Q40 100 50 110 Z" fill="none" stroke="#d9b75e" stroke-width=".9"/>
   </svg>`;
 }
 

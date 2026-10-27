@@ -37,8 +37,16 @@ async function login(u) {
   cookies.set(u, r.cookie);
   return r.cookie;
 }
+let admCookie = null;
+async function adminCookie() {
+  if (admCookie) return admCookie;
+  const r = await http('/api/login', { body: { username: 'admin', password: 'admin123' } });
+  admCookie = r.cookie;
+  return admCookie;
+}
 async function makeUser(username, balance = 0) {
-  const r = await http('/api/register', { body: { username, displayName: username[0].toUpperCase() + username.slice(1), password: '123456' } });
+  const adm = await adminCookie();
+  const r = await http('/api/admin/users', { body: { username, displayName: username[0].toUpperCase() + username.slice(1), password: '123456' }, cookie: adm });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const u = await app.db.get('SELECT id FROM users WHERE username = $1', [username]);
   await app.db.run('UPDATE users SET balance = $1 WHERE id = $2', [balance, u.id]);
@@ -58,7 +66,7 @@ class Client {
   async waitFor(pred, ms = 3000) {
     const t = Date.now();
     while (Date.now() - t < ms) { for (const m of this.msgs) if (pred(m)) return m; await sleep(10); }
-    throw new Error('waitFor timeout; last: ' + JSON.stringify(this.msgs.slice(-3)).slice(0, 500));
+    throw new Error("waitFor timeout; last: " + JSON.stringify(this.msgs.slice(-2).map((m) => m.room?.round ? { ph: m.room.round.phase, turn: m.room.round.turn, cp: m.room.round.creditPot, pot: m.room.round.pot, deal: m.room.round.creditDeal, log: m.room.round.log?.slice(-4) } : m)).slice(0, 1500));
   }
   async waitRoom(pred, ms) { return (await this.waitFor((m) => m.t === 'room' && pred(m.room), ms)).room; }
   async error() { return this.waitFor((m) => m.t === 'error'); }
@@ -284,4 +292,303 @@ test('balansı çatmayan oyunçu real raund başlada bilmir — kredit/demo mesa
   assert.match((await A.error()).msg, /Kredit istə/);
   for (const c of [A, B]) { c.send({ t: 'leaveRoom' }); c.close(); }
   await sleep(50);
+});
+
+// ---------------- masa hədiyyələri ----------------
+test('masa hədiyyəsi aktiv raundda: oyun balansları uyğunlaşır, animasiya hadisəsi bir dəfə, təkrar açar oynatmır', async () => {
+  const g = await realRound('tg', 2000);
+  await sleep(30);
+  const qid = g.pid === g.a ? g.b : g.a;
+  const room = app.rooms.rooms.get(g.code);
+  const pBefore = room.round.players.get(g.pid).balance;
+  const qBefore = room.round.players.get(qid).balance;
+  g.A.msgs = []; g.B.msgs = [];
+  const k = key();
+  const r = await http('/api/table-gift', { body: { toId: qid, giftId: 'fire_ace', key: k }, cookie: await login(g.puser) });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.credited, 300); assert.equal(r.data.price, 1000);
+  assert.equal(room.round.players.get(g.pid).balance, pBefore - 1000);
+  assert.equal(room.round.players.get(qid).balance, qBefore + 300);
+  assert.equal(await bal(g.pid), pBefore - 1000);
+  assert.equal(await bal(qid), qBefore + 300);
+  for (const c of [g.A, g.B]) {
+    const ev = await c.waitFor((m) => m.t === 'tgift');
+    assert.equal(ev.giftId, 'fire_ace'); assert.equal(ev.toId, qid); assert.equal(ev.fromId, g.pid); assert.equal(ev.id, r.data.giftLogId);
+  }
+  // eyni açarla təkrar (bağlantı təkrarı): pul yenidən çıxılmır, animasiya yenidən göndərilmir
+  const again = await http('/api/table-gift', { body: { toId: qid, giftId: 'fire_ace', key: k }, cookie: await login(g.puser) });
+  assert.equal(again.data.duplicate, true);
+  await sleep(80);
+  assert.equal(g.A.msgs.filter((m) => m.t === 'tgift').length, 1);
+  assert.equal(g.B.msgs.filter((m) => m.t === 'tgift').length, 1);
+  assert.equal(await bal(g.pid), pBefore - 1000);
+  // qalan balansla xod: yaddaş və baza uyğundur
+  g.P.clear();
+  g.P.send({ t: 'act', action: { type: 'xod', amount: 10, v: room.round.version } });
+  await g.P.waitRoom((rr) => rr.round.turn !== g.pid);
+  await sleep(50);
+  assert.equal(await bal(g.pid), pBefore - 1010);
+  assert.equal(room.round.players.get(g.pid).balance, pBefore - 1010);
+  // özünə, bota, masada olmayana — qadağan
+  const self = await http('/api/table-gift', { body: { toId: g.pid, giftId: 'card_rain', key: key() }, cookie: await login(g.puser) });
+  assert.match(self.data.error, /Özünüzə/);
+  const out = await makeUser('tg_out', 0);
+  const away = await http('/api/table-gift', { body: { toId: out, giftId: 'card_rain', key: key() }, cookie: await login(g.puser) });
+  assert.match(away.data.error, /masada deyil/);
+  // balans çatmır
+  await app.db.run('UPDATE users SET balance = 50 WHERE id = $1', [qid]);
+  room.round.players.get(qid).balance = 50; room.members.get(qid).balance = 50;
+  const quser = qid === g.a ? 'tg_a' : 'tg_b';
+  const poor = await http('/api/table-gift', { body: { toId: g.pid, giftId: 'card_rain', key: key() }, cookie: await login(quser) });
+  assert.equal(poor.status, 400); assert.match(poor.data.error, /Balansınız çatmır/);
+  assert.equal(await bal(qid), 50);
+  for (const c of [g.A, g.B]) { c.send({ t: 'leaveRoom' }); c.close(); }
+  await sleep(80);
+});
+
+test('masa hədiyyəsi: demo/botlu otaqda və otaqdan kənarda işləmir; admin siyahı və ayarlar', async () => {
+  const a = await makeUser('tgd_a', 5000);
+  const A = await client('tgd_a');
+  A.send({ t: 'createRoom', demo: true, bots: 2, name: 'Demo' });
+  const room = await A.waitRoom((r) => r.demo);
+  const bot = room.members.find((m) => m.isBot).id;
+  const r1 = await http('/api/table-gift', { body: { toId: bot, giftId: 'card_rain', key: key() }, cookie: await login('tgd_a') });
+  assert.match(r1.data.error, /Demo və botlu/);
+  A.send({ t: 'leaveRoom' }); await sleep(80);
+  const b = await makeUser('tgd_b', 0);
+  const r2 = await http('/api/table-gift', { body: { toId: b, giftId: 'card_rain', key: key() }, cookie: await login('tgd_a') });
+  assert.match(r2.data.error, /yalnız masada/);
+  assert.equal(await bal(a), 5000);
+  A.close();
+  // kataloq: hamıya; ayarlar: yalnız admin
+  const cat = await http('/api/table-gifts', { cookie: await login('tgd_a') });
+  assert.equal(cat.data.sharePct, 30); assert.equal(cat.data.gifts.length, 3);
+  const plain = await http('/api/admin/table-gifts', { cookie: await login('tgd_a') });
+  assert.equal(plain.status, 403);
+  const adm = (await http('/api/login', { body: { username: 'admin', password: 'admin123' } })).cookie;
+  const list = await http('/api/admin/table-gifts', { cookie: adm });
+  assert.ok(list.data.items.some((x) => x.giftId === 'fire_ace' && x.credited === 300));
+  const set = await http('/api/admin/table-gifts/settings', { body: { sharePct: 40, gifts: [{ id: 'card_rain', price: 120, active: false }] }, cookie: adm });
+  assert.equal(set.status, 200, JSON.stringify(set.data));
+  assert.equal(set.data.sharePct, 40);
+  const cat2 = await http('/api/table-gifts', { cookie: await login('tgd_a') });
+  assert.deepEqual(cat2.data.gifts.map((x) => x.id), ['table_king', 'fire_ace']); // deaktiv hədiyyə kataloqda görünmür
+  const bad = await http('/api/admin/table-gifts/settings', { body: { sharePct: 150 }, cookie: adm });
+  assert.equal(bad.status, 400);
+  await http('/api/admin/table-gifts/settings', { body: { sharePct: 30, gifts: [{ id: 'card_rain', price: 100, active: true }] }, cookie: adm });
+});
+
+// ---------------- v2.7: giriş, qeydiyyat, borc istəyi, borca oyun ----------------
+test('qeydiyyat bağlıdır; admin oyunçu yaradır (bonus bir dəfə); giriş açarı; son admin qorunur', async () => {
+  const reg = await http('/api/register', { body: { username: 'yeni_x', displayName: 'Yeni', password: '123456' } });
+  assert.equal(reg.status, 403);
+  assert.equal(await app.db.get('SELECT id FROM users WHERE username = $1', ['yeni_x']), null);
+  const adm = await adminCookie();
+  const c1 = await http('/api/admin/users', { body: { username: 'ali_k', displayName: 'Əli', password: 'ilkin123' }, cookie: adm });
+  assert.equal(c1.status, 200, JSON.stringify(c1.data));
+  assert.equal(c1.data.bonus, 100);
+  const dup = await http('/api/admin/users', { body: { username: 'ali_k', displayName: 'Əli 2', password: 'ilkin123' }, cookie: adm });
+  assert.equal(dup.status, 400);
+  assert.equal(Number((await app.db.get(`SELECT COUNT(*) AS n FROM transactions t JOIN users u ON u.id = t.user_id WHERE u.username = 'ali_k' AND t.kind = 'bonus'`)).n), 1);
+  // adi oyunçu oyunçu yarada bilməz
+  const pl = await http('/api/login', { body: { username: 'ali_k', password: 'ilkin123' } });
+  assert.equal(pl.status, 200);
+  const no = await http('/api/admin/users', { body: { username: 'zz_zz', displayName: 'Zz', password: '123456' }, cookie: pl.cookie });
+  assert.equal(no.status, 403);
+  // öz şifrəsini dəyişir
+  const pw = await http('/api/password', { body: { oldPassword: 'ilkin123', newPassword: 'yeni4567' }, cookie: pl.cookie });
+  assert.equal(pw.status, 200);
+  // giriş bağlanır: yeni oyunçu girişi dayanır, admin daxil olur, köhnə sessiya işləyir
+  const off = await http('/api/admin/login-switch', { body: { open: false }, cookie: adm });
+  assert.equal(off.data.playerLoginOpen, false);
+  const denied = await http('/api/login', { body: { username: 'ali_k', password: 'yeni4567' } });
+  assert.equal(denied.status, 400);
+  assert.match(denied.data.error, /bağlıdır/);
+  assert.equal((await http('/api/login', { body: { username: 'admin', password: 'admin123' } })).status, 200);
+  assert.equal((await http('/api/me', { cookie: pl.cookie })).data.user.username, 'ali_k');
+  assert.equal((await http('/api/register', { body: { username: 'yeni_y', displayName: 'Y', password: '123456' } })).status, 403);
+  // ayar bazada saxlanılır — restartdan sonra da bağlıdır
+  app.rooms.stop(); app.rooms.rooms.clear();
+  await app.close();
+  await boot();
+  cookies.clear();
+  assert.equal((await http('/api/login', { body: { username: 'ali_k', password: 'yeni4567' } })).status, 400);
+  const adm2 = (await http('/api/login', { body: { username: 'admin', password: 'admin123' } })).cookie;
+  await http('/api/admin/login-switch', { body: { open: true }, cookie: adm2 });
+  const ok = await http('/api/login', { body: { username: 'ali_k', password: 'yeni4567' } });
+  assert.equal(ok.status, 200);
+  // bloklananda sessiya etibarsız olur
+  const aliId = c1.data.id;
+  await http(`/api/admin/users/${aliId}/status`, { body: { status: 'blocked' }, cookie: adm2 });
+  assert.equal((await http('/api/me', { cookie: ok.cookie })).data.user, null);
+  await http(`/api/admin/users/${aliId}/status`, { body: { status: 'approved' }, cookie: adm2 });
+  // son aktiv admin: başqa admin yoxdursa onun rolu/statusu dəyişdirilə bilməz (özünü dəyişmək də qadağandır)
+  const adminId = Number((await app.db.get(`SELECT id FROM users WHERE username = 'admin'`)).id);
+  const self = await http(`/api/admin/users/${adminId}/status`, { body: { status: 'blocked' }, cookie: adm2 });
+  assert.equal(self.status, 400);
+  await http(`/api/admin/users/${aliId}/role`, { body: { role: 'admin' }, cookie: adm2 });
+  const aliAdm = (await http('/api/login', { body: { username: 'ali_k', password: 'yeni4567' } })).cookie;
+  // indi iki admin var: Əli admini bloklaya bilər; sonra Əli tək admin qalanda heç kim onu sala bilməz
+  assert.equal((await http(`/api/admin/users/${aliId}/role`, { body: { role: 'player' }, cookie: aliAdm })).status, 400); // özünü yox
+  await app.db.run(`UPDATE users SET status = 'blocked' WHERE username = 'admin'`); // simulyasiya: digər admin bloklanıb
+  assert.equal(await app.store.activeAdminCount(), 1);
+  await app.db.run(`UPDATE users SET status = 'approved' WHERE username = 'admin'`);
+  await http(`/api/admin/users/${aliId}/role`, { body: { role: 'player' }, cookie: adm2 });
+  admCookie = null;
+});
+
+test('borc istə: təsdiqə qədər heç nə dəyişmir; təsdiqdə bir tranzaksiya; təkrar/paralel təsdiq bir dəfə; rədd/geri götürmə', async () => {
+  const L = await makeUser('lr_l', 500); const B = await makeUser('lr_b', 0);
+  const lc = await login('lr_l'); const bc = await login('lr_b');
+  const self = await http('/api/loans/request', { body: { lenderId: B, amount: 10, dueAt: Date.now() + 86_400_000, key: key() }, cookie: bc });
+  assert.match(self.data.error, /Özünüzdən/);
+  const bot = await http('/api/loans/request', { body: { lenderId: -5, amount: 10, dueAt: Date.now() + 86_400_000, key: key() }, cookie: bc });
+  assert.match(bot.data.error, /Botlardan/);
+  const rq = await http('/api/loans/request', { body: { lenderId: L, amount: 200, dueAt: Date.now() + 2 * 86_400_000, key: key() }, cookie: bc });
+  assert.equal(rq.status, 200, JSON.stringify(rq.data));
+  assert.equal(await bal(L), 500); assert.equal(await bal(B), 0);
+  // borc alan özü təsdiqləyə bilməz
+  assert.equal((await http(`/api/loans/${rq.data.loanId}/approve`, { body: { key: key() }, cookie: bc })).status, 400);
+  const res = await Promise.all([1, 2, 3].map(() => http(`/api/loans/${rq.data.loanId}/approve`, { body: { key: key() }, cookie: lc })));
+  assert.equal(res.filter((x) => x.status === 200).length, 1);
+  assert.equal(await bal(L), 300); assert.equal(await bal(B), 200);
+  const loan = await app.db.get('SELECT status, remaining FROM loans WHERE id = $1', [rq.data.loanId]);
+  assert.deepEqual([loan.status, Number(loan.remaining)], ['active', 200]);
+  // qismən qaytarma
+  const rp = await http(`/api/loans/${rq.data.loanId}/repay`, { body: { amount: 50, key: key() }, cookie: bc });
+  assert.equal(rp.data.remaining, 150);
+  // balans çatmayanda təsdiq alınmır
+  const rq2 = await http('/api/loans/request', { body: { lenderId: L, amount: 1000, dueAt: Date.now() + 86_400_000, key: key() }, cookie: bc });
+  const ap2 = await http(`/api/loans/${rq2.data.loanId}/approve`, { body: { key: key() }, cookie: lc });
+  assert.match(ap2.data.error, /çatmır/);
+  assert.equal((await app.db.get('SELECT status FROM loans WHERE id = $1', [rq2.data.loanId])).status, 'requested');
+  assert.equal((await http(`/api/loans/${rq2.data.loanId}/reject`, { body: { key: key() }, cookie: lc })).status, 200);
+  const rq3 = await http('/api/loans/request', { body: { lenderId: L, amount: 5, dueAt: Date.now() + 86_400_000, key: key() }, cookie: bc });
+  assert.equal((await http(`/api/loans/${rq3.data.loanId}/withdraw`, { body: { key: key() }, cookie: bc })).status, 200);
+  assert.equal((await http(`/api/loans/${rq3.data.loanId}/approve`, { body: { key: key() }, cookie: lc })).status, 400);
+  assert.equal(await bal(L), 350); assert.equal(await bal(B), 150);
+});
+
+// iki real oyunçu; kasıb oyunçunun növbəsinə qədər oyun
+async function creditRound(prefix, poorBal = 10, richBal = 1000) {
+  const poor = await makeUser(`${prefix}_p`, poorBal); const rich = await makeUser(`${prefix}_r`, richBal);
+  const P = await client(`${prefix}_p`); const R = await client(`${prefix}_r`);
+  P.send({ t: 'createRoom', name: prefix, visibility: 'private', settings: { ante: 10, minBet: 10 } });
+  const room = await P.waitRoom((r) => r.name === prefix);
+  R.send({ t: 'joinRoom', code: room.code });
+  await P.waitRoom((r) => r.members.length === 2);
+  P.clear(); R.clear();
+  P.send({ t: 'startRound' });
+  let st = await P.waitRoom((r) => r.round?.phase === 'betting');
+  if (st.round.turn === rich) {
+    R.send({ t: 'act', action: { type: 'xod', amount: 10, v: st.round.version } });
+    st = await P.waitRoom((r) => r.round?.turn === poor);
+  }
+  return { poor, rich, P, R, code: room.code, st, room: () => app.rooms.rooms.get(room.code) };
+}
+
+test('borca oyna: qəbul → borclu uduzur → DB-də adi borc (Borca oyun — otaq/raund); real xal yaranmır', async () => {
+  const g = await creditRound('cp1');
+  await sleep(30);
+  assert.equal(await bal(g.poor), 0);
+  const total0 = (await bal(g.poor)) + (await bal(g.rich)) + g.room().round.pot;
+  assert.equal(g.st.round.me.canCreditOffer, true);
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'creditOffer', limit: 100, dueDays: 7, v: g.st.round.version } });
+  const st1 = await g.R.waitRoom((r) => r.round?.phase === 'creditOffer');
+  assert.equal(st1.round.pending.limit, 100);
+  // təkrar qəbul (bağlantı bərpası) ikinci dəfə işləmir
+  g.P.clear(); g.R.clear();
+  g.R.send({ t: 'act', action: { type: 'creditAccept', limit: 100, v: st1.round.version } });
+  g.P.clear(); g.R.clear();
+  g.R.send({ t: 'act', action: { type: 'creditAccept', limit: 100, v: st1.round.version } });
+  const st2 = await g.P.waitRoom((r) => r.round?.creditDeal?.limit === 100 && r.round.phase === 'betting');
+  // hədiyyə üçün şərti limit istifadə olunmur
+  const gift = await http('/api/table-gift', { body: { toId: g.rich, giftId: 'card_rain', key: key() }, cookie: await login('cp1_p') });
+  assert.match(gift.data.error, /Balansınız çatmır/);
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'xod', amount: 60, v: st2.round.version } });
+  const st3 = await g.R.waitRoom((r) => r.round?.turn === g.rich && r.round.creditPot === 60);
+  assert.equal(st3.round.players.find((p) => p.id === g.poor).creditPut, 60);
+  assert.equal(await bal(g.poor), 0);   // şərti qoyuluş balansa yazılmır
+  g.P.clear(); g.R.clear();
+  g.R.send({ t: 'act', action: { type: 'xod', amount: 60, v: st3.round.version } });
+  const st4 = await g.P.waitRoom((r) => r.round?.turn === g.poor);
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'pas', v: st4.round.version } });
+  await g.P.waitRoom((r) => r.round?.phase === 'finished');
+  await sleep(80);
+  const loans = await app.db.all('SELECT * FROM loans WHERE borrower_id = $1 AND lender_id = $2', [g.poor, g.rich]);
+  assert.equal(loans.length, 1);
+  assert.equal(Number(loans[0].amount), 60);
+  assert.equal(loans[0].status, 'active');
+  assert.match(loans[0].note, /^Borca oyun — otaq cp1|^Borca oyun — otaq [A-Z0-9]+ \/ raund/);
+  assert.equal((await bal(g.poor)) + (await bal(g.rich)), total0); // real xal: nə yarandı, nə itdi
+  // profil: borclu/alacaqlı
+  const pp = await http('/api/profile', { cookie: await login('cp1_p') });
+  assert.ok(pp.data.loans.some((l) => l.lenderId === g.rich && l.remaining === 60 && /Borca oyun/.test(l.note)));
+  for (const c of [g.P, g.R]) { c.send({ t: 'leaveRoom' }); c.close(); }
+  await sleep(80);
+});
+
+test('borca oyna: rədd → balansı çatmayan avtomatik pas, borc yoxdur; borclu udur → borc yoxdur', async () => {
+  const g = await creditRound('cp2');
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'creditOffer', limit: 50, dueDays: 3, v: g.st.round.version } });
+  const s1 = await g.R.waitRoom((r) => r.round?.phase === 'creditOffer');
+  g.P.clear(); g.R.clear();
+  g.R.send({ t: 'act', action: { type: 'creditDecline', v: s1.round.version } });
+  const f = await g.P.waitRoom((r) => r.round?.phase === 'finished');
+  assert.deepEqual(f.round.result.winners, [g.rich]);
+  await sleep(60);
+  assert.equal(Number((await app.db.get('SELECT COUNT(*) AS n FROM loans WHERE borrower_id = $1', [g.poor])).n), 0);
+  for (const c of [g.P, g.R]) { c.send({ t: 'leaveRoom' }); c.close(); }
+  await sleep(60);
+  const h = await creditRound('cp3');
+  h.P.clear(); h.R.clear();
+  h.P.send({ t: 'act', action: { type: 'creditOffer', limit: 50, dueDays: 3, v: h.st.round.version } });
+  const a1 = await h.R.waitRoom((r) => r.round?.phase === 'creditOffer');
+  h.P.clear(); h.R.clear();
+  h.R.send({ t: 'act', action: { type: 'creditAccept', limit: 50, v: a1.round.version } });
+  const a2 = await h.P.waitRoom((r) => r.round?.creditDeal && r.round.phase === 'betting');
+  h.P.clear(); h.R.clear();
+  h.P.send({ t: 'act', action: { type: 'xod', amount: 50, v: a2.round.version } });
+  const a3 = await h.R.waitRoom((r) => r.round?.turn === h.rich);
+  h.P.clear(); h.R.clear();
+  h.R.send({ t: 'act', action: { type: 'pas', v: a3.round.version } });
+  const fin = await h.P.waitRoom((r) => r.round?.phase === 'finished');
+  assert.deepEqual(fin.round.result.winners, [h.poor]);
+  await sleep(80);
+  assert.equal(Number((await app.db.get('SELECT COUNT(*) AS n FROM loans WHERE borrower_id = $1', [h.poor])).n), 0);
+  // borclu yalnız real bankı alır: iki oyun haqqı (+ əvvəl varlının xodu varsa) — öz 50 şərti qoyuluşu yox
+  const potReal = fin.round.result.payouts[h.poor];
+  assert.equal(await bal(h.poor), potReal);
+  assert.ok(potReal <= 30);
+  for (const c of [h.P, h.R]) { c.send({ t: 'leaveRoom' }); c.close(); }
+  await sleep(60);
+});
+
+test('borca oyna + server restartı: bitməmiş raundda borc yaranmır, real qoyuluşlar qaytarılır', async () => {
+  const g = await creditRound('cp4');
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'creditOffer', limit: 80, dueDays: 3, v: g.st.round.version } });
+  const s1 = await g.R.waitRoom((r) => r.round?.phase === 'creditOffer');
+  g.P.clear(); g.R.clear();
+  g.R.send({ t: 'act', action: { type: 'creditAccept', limit: 80, v: s1.round.version } });
+  const s2 = await g.P.waitRoom((r) => r.round?.creditDeal && r.round.phase === 'betting');
+  g.P.clear(); g.R.clear();
+  g.P.send({ t: 'act', action: { type: 'xod', amount: 80, v: s2.round.version } });
+  await g.R.waitRoom((r) => r.round?.creditPot === 80);
+  await sleep(60);
+  const before = { p: await bal(g.poor), r: await bal(g.rich) };
+  g.P.close(); g.R.close();
+  app.rooms.stop(); app.rooms.rooms.clear();
+  await app.close();
+  await boot();
+  cookies.clear(); admCookie = null;
+  await sleep(100);
+  assert.equal(Number((await app.db.get('SELECT COUNT(*) AS n FROM loans WHERE borrower_id = $1', [g.poor])).n), 0);
+  // real qoyuluşlar (oyun haqları və varlının xodu) qaytarılıb, şərti qoyuluş silinib
+  assert.equal(await bal(g.poor), before.p + 10);
+  assert.ok((await bal(g.rich)) >= before.r + 10);
 });

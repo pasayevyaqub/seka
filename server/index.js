@@ -3,7 +3,7 @@ import { createApp } from './app.js';
 
 const app = await createApp();
 const port = await app.listen(Number(process.env.PORT) || 3000);
-console.log(`Seka işləyir: http://localhost:${port}`);
+console.log(`Dairə işləyir: http://localhost:${port}`);
 
 // Render yenidən deploy edəndə SIGTERM göndərir: gözləyən baza yazılışlarını bitirib çıxırıq
 let stopping = false;

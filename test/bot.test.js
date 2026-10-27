@@ -38,8 +38,8 @@ test('bot təkliflərə cavab verir, seka qərarı verir, kart atır', () => {
   assert.ok(a.type === 'offerAccept' || a.type === 'offerDecline');
   r.act(BOT, { type: 'offerAccept' }, 0);
   assert.equal(r.phase, 'sekaJoin');
-  // əsas oyunçu bot insanlara vaxt verir, sonra başladır
-  assert.equal(decide(r.viewFor(BOT, 0), BOT, {}, 0), null);
+  // qoşulmaq hüququ olan başqa oyunçu yoxdur — əsas oyunçu bot başlada bilər
+  assert.deepEqual(r.viewFor(BOT, 0).sekaJoin.waiting, []);
   assert.equal(decide(r.viewFor(BOT, 15_000), BOT, {}, 15_000).type, 'sekaStart');
   r.act(BOT, { type: 'sekaStart' }, 15_000);
   const d = decide(r.viewFor(BOT, 15_000), BOT, {}, 15_000);

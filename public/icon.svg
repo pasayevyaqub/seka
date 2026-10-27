@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#7a1022"/><text x="50" y="70" font-size="60" text-anchor="middle" fill="#e8c26a" font-family="Georgia">S</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Dairə: sadə dairə motivi (kart və pul təsviri yoxdur) -->
+  <rect width="512" height="512" rx="112" fill="#0f3a27"/>
+  <circle cx="256" cy="256" r="168" fill="none" stroke="#e8c26a" stroke-width="30"/>
+  <circle cx="256" cy="256" r="104" fill="none" stroke="#e8c26a" stroke-opacity=".55" stroke-width="14"/>
+  <circle cx="256" cy="256" r="38" fill="#e8c26a"/>
+</svg>

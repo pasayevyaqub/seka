@@ -100,17 +100,21 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     const p = url.pathname;
     const m = req.method;
 
-    if (p === '/api/register' && m === 'POST') {
-      if (rateLimited(ip, 'reg', limits.register) || rateLimited(ip, 'reg-h', limits.register * 6, 3_600_000)) throw new UserError('Çox qeydiyyat cəhdi. Bir az sonra yenidən yoxlayın.');
-      const r = await store.register(await readBody(req), finance);
-      return json(res, 200, { ok: true, bonus: r.bonus, msg: r.bonus ? `Qeydiyyat tamamlandı! Hesabınıza ${r.bonus} oyun xalı virtual başlanğıc bonusu yazıldı. Daxil olun.` : 'Qeydiyyat tamamlandı. Daxil olun.' });
-    }
+    // Açıq qeydiyyat BAĞLIDIR (hər iki giriş rejimində). Hesabları yalnız admin yaradır: POST /api/admin/users
+    if (p === '/api/register') return json(res, 403, { error: 'Qeydiyyat bağlıdır. Hesabı admin yaradır — istifadəçi adı və şifrəni admindən alın.' });
     if (p === '/api/login' && m === 'POST') {
       if (rateLimited(ip, 'login', limits.login)) throw new UserError('Çox cəhd. Bir az gözləyin.');
       const b = await readBody(req);
       const { token, user } = await store.login(b.username, b.password);
+      // "Oyunçu girişi bağlı": adi oyunçuların YENİ girişi dayanır; admin/moderator həmişə daxil olur.
+      // Artıq daxil olmuş oyunçuların sessiyalarına toxunulmur.
+      if (user.role === 'player' && !(await finance.playerLoginOpen())) {
+        await store.logout(token);
+        throw new UserError('Oyunçu girişi hazırda bağlıdır. Admin açanda yenidən cəhd edin.');
+      }
       return json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(token, 60 * 60 * 24 * 30) });
     }
+    if (p === '/api/login-status' && m === 'GET') return json(res, 200, { playerLoginOpen: await finance.playerLoginOpen(), registration: false });
     if (p === '/api/logout' && m === 'POST') {
       if (cookies[COOKIE]) await store.logout(cookies[COOKIE]);
       return json(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', 0) });
@@ -169,6 +173,36 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       return json(res, 200, { users });
     }
 
+    // ---- masa hədiyyələri ----
+    if (p === '/api/table-gifts' && m === 'GET') {
+      return json(res, 200, { gifts: await finance.giftTypes(db, true), sharePct: await finance.giftSharePct() });
+    }
+    if (p === '/api/table-gift' && m === 'POST') {
+      if (rateLimited(me.id, 'tgift', 20)) throw new UserError('Çox sorğu. Bir az gözləyin.');
+      const b = await readBody(req);
+      const toId = Number(b.toId);
+      const anyRoom = rooms.roomOfOrNull(me.id);
+      if (!anyRoom) throw new UserError('Hədiyyə yalnız masada, eyni otaqdakı oyunçuya göndərilir.');
+      if (rooms.isPractice(anyRoom)) throw new UserError('Demo və botlu (məşq) otaqlarda hədiyyə göndərmək olmaz.');
+      if (toId === me.id) throw new UserError('Özünüzə hədiyyə göndərə bilməzsiniz.');
+      if (!(toId > 0)) throw new UserError('Botlara hədiyyə göndərmək olmaz.');
+      // pul göndərənin otaq növbəsində: aktiv raundun yaddaş balansı ilə ardıcıl və uyğun
+      const r = await rooms.moneyOp(me.id, async () => {
+        const room = rooms.realRoomOf(me.id);
+        if (!room || room !== anyRoom) throw new UserError('Otaq dəyişdi, yenidən cəhd edin.');
+        if (!room.members.has(toId)) throw new UserError('Alıcı bu masada deyil.');
+        return finance.sendTableGift(me.id, toId, b.giftId, room.code, b.key);
+      });
+      // animasiya yalnız ilk (uğurlu) icrada — təkrar açarla gələn sorğu yenidən oynatmır
+      if (!r.duplicate) {
+        const room = rooms.realRoomOf(me.id);
+        if (room) rooms.giftEvent(room, { id: r.giftLogId, giftId: r.giftId, giftName: r.giftName, fromId: r.fromId, fromName: r.fromName, toId: r.toId, toName: r.toName, credited: r.credited });
+      }
+      pushNotify(r);
+      const { payments, ...rest } = strip(r);
+      return json(res, 200, rest);
+    }
+
     // ---- oyunçunun maliyyə əməliyyatları ----
     if (p.startsWith('/api/credit/') || p === '/api/gift' || p.startsWith('/api/loans/')) {
       if (m !== 'POST') return json(res, 405, { error: 'POST gözlənilir.' });
@@ -177,16 +211,20 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       let r;
       if (p === '/api/credit/request') {
         r = await finance.requestCredit(me.id, b.amount, b.note, b.key);
-        if (!r.duplicate) toStaff({ t: 'staff', kind: 'credit', text: `${me.display_name} ${r.amount} oyun xalı kredit istəyir.` });
+        if (!r.duplicate) toStaff({ t: 'staff', kind: 'credit', text: `${me.display_name} ${r.amount} xal kredit istəyir.` });
       } else if (p === '/api/credit/cancel') r = await finance.cancelCreditRequest(me.id, Number(b.requestId), b.key);
       else if (p === '/api/credit/repay') r = await rooms.moneyOp(me.id, () => finance.repayCredit(me.id, b.amount, b.key));
       else if (p === '/api/gift') r = await rooms.moneyOp(me.id, () => finance.giftPlayer(me.id, Number(b.toId), b.amount, b.note, b.key));
       else if (p === '/api/loans/offer') r = await finance.offerLoan(me.id, Number(b.borrowerId), b.amount, Number(b.dueAt), b.note, b.key);
+      else if (p === '/api/loans/request') r = await finance.requestLoan(me.id, Number(b.lenderId), b.amount, Number(b.dueAt), b.note, b.key);
       else {
-        const lm = p.match(/^\/api\/loans\/(\d+)\/(accept|decline|cancel|repay)$/);
+        const lm = p.match(/^\/api\/loans\/(\d+)\/(accept|decline|cancel|repay|approve|reject|withdraw)$/);
         if (!lm) return json(res, 404, { error: 'Tapılmadı.' });
         const loanId = Number(lm[1]);
-        if (lm[2] === 'accept') {
+        if (lm[2] === 'approve') r = await rooms.moneyOp(me.id, () => finance.approveLoanRequest(me.id, loanId, b.key)); // pul borc verəndən çıxır
+        else if (lm[2] === 'reject') r = await finance.rejectLoanRequest(me.id, loanId, b.key);
+        else if (lm[2] === 'withdraw') r = await finance.withdrawLoanRequest(me.id, loanId, b.key);
+        else if (lm[2] === 'accept') {
           const loan = await db.get('SELECT lender_id FROM loans WHERE id = $1', [loanId]);
           if (!loan) throw new UserError('Təklif tapılmadı.');
           // pul borc verənin balansından çıxır → onun otaq növbəsində
@@ -212,7 +250,27 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     if (p === '/api/admin/credit' && m === 'GET') return json(res, 200, await finance.adminCreditOverview());
     if (p === '/api/admin/loans' && m === 'GET') return json(res, 200, { loans: await finance.adminLoans() });
     if (p === '/api/admin/gifts' && m === 'GET') return json(res, 200, { items: await finance.adminGiftHistory() });
-    if (p === '/api/admin/settings' && m === 'GET') return json(res, 200, { signupBonus: await finance.signupBonus() });
+    if (p === '/api/admin/settings' && m === 'GET') return json(res, 200, { signupBonus: await finance.signupBonus(), playerLoginOpen: await finance.playerLoginOpen() });
+    // adminin oyunçu yaratması: görünən ad, unikal istifadəçi adı, ilkin şifrə; başlanğıc bonusu bir dəfə (mövcud ayarla)
+    if (p === '/api/admin/users' && m === 'POST') {
+      if (!isAdmin(me)) throw new UserError('Oyunçunu yalnız admin yarada bilər.');
+      const b = await readBody(req);
+      const r = await store.register({ username: b.username, displayName: b.displayName, password: b.password }, finance);
+      return json(res, 200, { ok: true, id: r.id, bonus: r.bonus, user: publicUser(await store.getUser(r.id)) });
+    }
+    if (p === '/api/admin/login-switch' && m === 'POST') {
+      if (!isAdmin(me)) throw new UserError('Girişi yalnız admin aça/bağlaya bilər.');
+      const b = await readBody(req);
+      return json(res, 200, { playerLoginOpen: await finance.setPlayerLoginOpen(!!b.open) });
+    }
+    if (p === '/api/admin/table-gifts' && m === 'GET') {
+      return json(res, 200, { items: await finance.adminTableGifts(), gifts: await finance.giftTypes(), sharePct: await finance.giftSharePct() });
+    }
+    if (p === '/api/admin/table-gifts/settings' && m === 'POST') {
+      if (!isAdmin(me)) throw new UserError('Hədiyyə ayarlarını yalnız admin dəyişə bilər.');
+      const b = await readBody(req);
+      return json(res, 200, await finance.setGiftSettings({ sharePct: b.sharePct, gifts: b.gifts }));
+    }
     if (p === '/api/admin/settings' && m === 'POST') {
       if (!isAdmin(me)) throw new UserError('Ayarları yalnız admin dəyişə bilər.');
       const b = await readBody(req);
@@ -242,6 +300,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
 
       if (action === 'status') {
         if (target.id === me.id) throw new UserError('Öz statusunuzu dəyişə bilməzsiniz.');
+        if (b.status !== 'approved' && target.role === 'admin' && (await store.activeAdminCount()) <= 1) throw new UserError('Son aktiv admini bloklamaq olmaz.');
         await store.setStatus(targetId, b.status);
         if (b.status === 'approved') rooms.userUpdated(publicUser(await store.getUser(targetId)));
         else { rooms.leave(targetId); rooms.disconnectUser(targetId); }
@@ -268,11 +327,15 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       } else if (action === 'role') {
         if (!isAdmin(me)) throw new UserError('Rolları yalnız admin dəyişə bilər.');
         if (target.id === me.id) throw new UserError('Öz rolunuzu dəyişə bilməzsiniz.');
+        if (target.role === 'admin' && b.role !== 'admin' && (await store.activeAdminCount()) <= 1) throw new UserError('Son aktiv adminin səlahiyyətini silmək olmaz.');
         await store.setRole(targetId, b.role);
         if (b.role === 'player') staffIds.delete(targetId); else staffIds.add(targetId);
         rooms.userUpdated(publicUser(await store.getUser(targetId)));
       } else if (action === 'password') {
         await store.setPassword(targetId, b.password);
+        // admin şifrəni dəyişəndə həmin hesabın köhnə sessiyaları etibarsız olur
+        await store.dropSessions(targetId);
+        rooms.disconnectUser(targetId);
       }
       return json(res, 200, { user: publicUser(await store.getUser(targetId)) });
     }

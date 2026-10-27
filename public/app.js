@@ -1,15 +1,19 @@
 import { cardSVG } from './cards.js';
-import { S, esc, fmt, money, toast, api, isStaff, isAdmin, isDemo, txList, fmtCents, fmtDate, avatarHTML, moneyCall, azLower } from './core.js';
+import { S, esc, fmt, money, toast, api, isStaff, isAdmin, isDemo, txList, fmtCents, fmtDate, avatarHTML, moneyCall, azLower, azAblative } from './core.js';
 import { renderRoom, showBubble } from './room.js';
 import { onRoom as fxOnRoom, afterRender as fxAfterRender } from './fx.js';
 import { toggleMute } from './sound.js';
+import { onGiftEvent, toggleAnimations, clearGiftQueue } from './giftfx.js';
+import { giftHandlers } from './gifts.js';
+import { installPeek, afterRenderPeek } from './peek.js';
+import { morph } from './morph.js';
 import { renderProfile, loadProfile, profileForms, profileHandlers, onSearchInput, pickRecipient, uploadAvatar, creditModal, STATS_NOTE } from './profile.js';
 import { renderAdmin, loadAdmin, refreshAdminList, adminForms, adminHandlers, adminModalSubmit } from './admin.js';
 
 const $app = document.getElementById('app');
 const SETTINGS_FIELDS = [
-  ['ante', 'Oyun haqqı (oyun xalı)'], ['minBet', 'Minimum xod (oyun xalı)'], ['maxBet', 'Maksimum xod (oyun xalı, 0 = limitsiz)'],
-  ['jackpotSix', 'Cəkpot 3×6 — hər rəqibdən (oyun xalı)'], ['jackpotAce', 'Cəkpot 3 Tuz — hər rəqibdən (oyun xalı)'],
+  ['ante', 'Oyun haqqı (xal)'], ['minBet', 'Minimum xod (xal)'], ['maxBet', 'Maksimum xod (xal, 0 = limitsiz)'],
+  ['jackpotSix', 'Cəkpot 3×6 — hər rəqibdən (xal)'], ['jackpotAce', 'Cəkpot 3 Tuz — hər rəqibdən (xal)'],
   ['turnSeconds', 'Xod vaxtı (saniyə)'], ['maxPlayers', 'Maks. oyunçu (2–8)'],
 ];
 const DEFAULTS = { ante: 10, minBet: 10, maxBet: 0, jackpotSix: 100, jackpotAce: 100, turnSeconds: 60, maxPlayers: 8 };
@@ -49,6 +53,8 @@ function connect() {
       const el = document.getElementById('myBalance');
       if (el) el.innerHTML = el.closest('.rb-bal') ? fmt(m.balance) : money(m.balance);
       if (S.view === 'profile') loadProfile(render);
+    } else if (m.t === 'tgift') {
+      onGiftEvent(m);
     } else if (m.t === 'bubble') {
       showBubble(m);
     } else if (m.t === 'notify') {
@@ -91,7 +97,7 @@ const act = (action) => {
 
 // açıq otaqlar siyahısı: yalnız siyahı hissəsi yenilənir (formalar və yazılan şifrələr silinmir)
 async function loadRooms() {
-  if (!S.user || isDemo() || S.view !== 'lobby') return;
+  if (!S.user || isDemo() || S.view !== 'lobby' || document.hidden) return; // gizli vərəqdə sorğu göndərilmir
   try {
     S.rooms = (await api('/api/rooms')).rooms;
     const el = document.getElementById('roomList');
@@ -133,35 +139,10 @@ document.addEventListener('fullscreenchange', () => render());
 document.addEventListener('webkitfullscreenchange', () => render());
 
 // ---------------- render ----------------
-// Yenidən çəkiləndə yazılmış mətnlər, seçimlər və fokus itməsin
-function captureForm() {
-  const vals = new Map();
-  $app.querySelectorAll('input, select, textarea').forEach((el) => {
-    const form = el.closest('form[data-form]');
-    const k = el.id ? `#${el.id}` : (form && el.name ? `${form.dataset.form}:${form.dataset.id || ''}:${el.name}:${el.type === 'radio' ? el.value : ''}` : null);
-    if (!k || el.type === 'file' || el.dataset.nokeep !== undefined) return;
-    vals.set(k, el.type === 'checkbox' || el.type === 'radio' ? { checked: el.checked } : { value: el.value });
-  });
-  const a = document.activeElement;
-  const focus = a && a !== document.body && $app.contains(a) ? { id: a.id, name: a.name, form: a.closest('form[data-form]')?.dataset.form, s: a.selectionStart, e: a.selectionEnd } : null;
-  return { vals, focus };
-}
-function restoreForm({ vals, focus }) {
-  $app.querySelectorAll('input, select, textarea').forEach((el) => {
-    const form = el.closest('form[data-form]');
-    const k = el.id ? `#${el.id}` : (form && el.name ? `${form.dataset.form}:${form.dataset.id || ''}:${el.name}:${el.type === 'radio' ? el.value : ''}` : null);
-    const v = k && vals.get(k);
-    if (!v || el.id === 'bet') return; // xod məbləği vəziyyətdən gəlir
-    if ('checked' in v) el.checked = v.checked; else if (el.value !== v.value) el.value = v.value;
-  });
-  if (focus) {
-    const el = focus.id ? document.getElementById(focus.id) : (focus.form ? $app.querySelector(`form[data-form="${focus.form}"] [name="${focus.name}"]`) : null);
-    if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(focus.s, focus.e); } catch { /* number */ } }
-  }
-}
-
+// Render: bütün tətbiq innerHTML ilə yenidən yaradılmır — morph yalnız dəyişən hissələri yerində yeniləyir.
+// Aktiv input DOM-dan çıxarılmır, ona fokus proqramla verilmir (klaviatura öz-özünə açılmır / sıçramır).
+let lastView = null;
 function render() {
-  const keep = captureForm();
   const scroll = window.scrollY;
   let html = '';
   if (S.view === 'loading') html = `<div class="wrap center muted" style="margin-top:30vh">Yüklənir...</div>`;
@@ -172,18 +153,28 @@ function render() {
   else if (S.view === 'profile') html = renderProfile(topbar);
   if (S.modal) html += renderModal();
   document.body.classList.toggle('in-room', S.view === 'room');
-  $app.innerHTML = html;
-  restoreForm(keep);
-  if (S.view !== 'room') window.scrollTo(0, scroll);
-  document.querySelectorAll('.log').forEach((l) => { l.scrollTop = l.scrollHeight; });
+  const viewChanged = lastView !== S.view;
+  lastView = S.view;
+  morph($app, html);
+  if (viewChanged && S.view !== 'room') window.scrollTo(0, 0);
+  else if (S.view !== 'room' && window.scrollY !== scroll && !isTyping()) window.scrollTo(0, scroll);
+  document.querySelectorAll('.log').forEach((l) => {
+    // jurnal yalnız istifadəçi aşağıda idisə aşağı sürüşür
+    if (l.scrollHeight - l.scrollTop - l.clientHeight < 60) l.scrollTop = l.scrollHeight;
+  });
   updateTimers();
-  if (S.view === 'room') { try { fxAfterRender(); } catch { /* yox */ } }
+  if (S.view === 'room') {
+    const side = document.querySelector('.room .side');
+    if (side) document.documentElement.style.setProperty('--side-h', `${side.offsetHeight}px`);
+    try { fxAfterRender(); } catch { /* yox */ }
+    try { afterRenderPeek(); } catch { /* yox */ }
+  }
 }
 
 function topbar(extra = '', title = '') {
   const showBal = S.user && !isDemo();
   return `<div class="topbar">
-    <div class="logo">SEKA</div>${title}
+    <div class="logo brand">Dairə</div>${title}
     <div class="spacer"></div>
     ${extra}
     ${S.user ? `<button class="btn small ghost bell" data-a="openNotifications" aria-label="Bildirişlər">🔔<span id="bellCount" class="bell-count ${S.unread > 0 ? '' : 'hidden'}">${S.unread || ''}</span></button>` : ''}
@@ -191,34 +182,16 @@ function topbar(extra = '', title = '') {
   </div>`;
 }
 
+// Giriş ekranı: yalnız ad, istifadəçi adı və şifrə. Qeydiyyat yoxdur (hesabları admin yaradır).
+// Masa, otaqlar və oyunçu siyahısı yalnız daxil olduqdan sonra yüklənir.
 function renderAuth() {
-  const login = S.authTab === 'login';
   return `<div class="wrap auth">
-    <div class="hero">
-      <div class="hero-cards">${cardSVG({ r: 'T', s: 'S' })}${cardSVG({ r: 'K', s: 'H' })}${cardSVG({ r: 'D', s: 'S' })}</div>
-      <div class="logo">SEKA</div>
-      <div class="muted">Dostlar üçün özəl kart oyunu</div>
-    </div>
-    <div class="card-panel">
-      <div class="tabs">
-        <button class="btn ${login ? 'active' : ''}" data-a="authTab" data-v="login">Giriş</button>
-        <button class="btn ${!login ? 'active' : ''}" data-a="authTab" data-v="register">Qeydiyyat</button>
-      </div>
-      ${login ? `
-      <form data-form="login">
-        <label>İstifadəçi adı</label><input name="username" autocomplete="username" autocapitalize="none" required>
-        <label>Şifrə</label><input name="password" type="password" autocomplete="current-password" required>
-        <button class="btn primary block mt">Daxil ol</button>
-      </form>` : `
-      <form data-form="register">
-        <label>İstifadəçi adı (girişdə istifadə olunur)</label><input name="username" autocapitalize="none" placeholder="məs. anar_m" required>
-        <label>Oyunda görünən ad</label><input name="displayName" placeholder="məs. Anar" required>
-        <label>Telefon (istəyə görə)</label><input name="phone" type="tel" placeholder="+994...">
-        <label>Şifrə (ən azı 6 simvol)</label><input name="password" type="password" autocomplete="new-password" required>
-        <button class="btn primary block mt">Qeydiyyatdan keç</button>
-        <p class="muted center" style="font-size:13px">Qeydiyyatdan dərhal sonra oynaya bilərsiniz. Yeni hesaba virtual başlanğıc bonusu verilir.</p>
-      </form>`}
-    </div>
+    <div class="hero"><div class="brand-mark" aria-hidden="true"></div><h1 class="logo brand">Dairə</h1></div>
+    <form data-form="login" class="card-panel auth-form">
+      <label for="loginUser">İstifadəçi adı</label><input id="loginUser" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+      <label for="loginPass">Şifrə</label><input id="loginPass" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn primary block mt">Daxil ol</button>
+    </form>
   </div>`;
 }
 
@@ -264,7 +237,7 @@ function renderLobby() {
     </div>
     <div class="card-panel demo-panel">
       <h2>🤖 Demo — kompüterlə oyna</h2>
-      <p class="muted" style="margin-top:0">Hər girişdə 10 000 virtual demo oyun xalı. Əsas balans, borclar və statistika dəyişmir.</p>
+      <p class="muted" style="margin-top:0">Hər girişdə 10 000 demo xal. Əsas balans, borclar və statistika dəyişmir.</p>
       <div class="row">${botCountSelect('demoBots')}<button class="btn blue" data-a="playBot">Demoya başla</button></div>
     </div>
     <div class="grid2 mt">
@@ -301,9 +274,11 @@ function renderLobby() {
 }
 
 // --------- modal ---------
+let modalSeq = 0;
 function renderModal() {
   const m = S.modal;
-  return `<div class="modal-bg" data-a="closeModalBg"><div class="modal" role="dialog" aria-modal="true">
+  if (!m._k) m._k = ++modalSeq; // hər yeni pəncərə yeni DOM alır (köhnə pəncərənin yazıları qarışmasın)
+  return `<div class="modal-bg" data-key="modal-${m._k}" data-a="closeModalBg"><div class="modal" role="dialog" aria-modal="true">
     <h3>${esc(m.title)}</h3>
     ${m.html ?? `<form data-form="modal">
       ${m.text ? `<p class="muted">${m.text}</p>` : ''}
@@ -375,7 +350,7 @@ function updateTimers() {
   });
   document.querySelectorAll('[data-secs]').forEach((el) => {
     const left = Math.max(0, Math.ceil((Number(el.dataset.secs) - now) / 1000));
-    el.textContent = String(left);
+    el.textContent = `${left}${el.dataset.unit || ''}`;
     el.classList.toggle('late', left <= 10);
   });
   document.querySelectorAll('[data-countdown]').forEach((el) => {
@@ -442,6 +417,30 @@ const H = {
   tieVote: (el) => act({ type: 'tieVote', choice: el.dataset.v }),
   sekaJoin: () => act({ type: 'sekaJoin' }),
   sekaStart: () => act({ type: 'sekaStart' }),
+  sekaSkip: () => act({ type: 'sekaSkip' }),
+  creditAccept: (el) => act({ type: 'creditAccept', limit: Number(el.dataset.limit) }),
+  creditDecline: () => act({ type: 'creditDecline' }),
+  creditOfferModal: () => {
+    const r = S.room?.round; const me = r?.me; if (!me) return;
+    const d = r.creditDeal;
+    const opp = r.players.find((p) => p.id !== S.user.id && p.status === 'active');
+    const need = (d ? d.used : 0) + Math.max(me.creditShortfall, r.minXod);
+    S.modal = { title: '🤝 Borca oyna', kind: 'creditOffer', submitLabel: 'Təklifi göndər',
+      text: `Balansınız: ${fmt(r.players.find((p) => p.id === S.user.id)?.balance ?? 0)}. Xod üçün çatışmayan: <b>${fmt(me.creditShortfall)}</b>.${d ? ` Hazırkı limit: ${fmt(d.limit)} (istifadə ${fmt(d.used)}) — artırmaq üçün ${esc(opp?.name || '')} yenidən təsdiqləməlidir.` : ''}<br>
+        ${esc(opp?.name || 'Qarşı tərəf')} qəbul etsə, balansınız bitəndə bu limit daxilində oynayırsınız. Uduzsanız yalnız faktiki istifadə etdiyiniz məbləğ ona borc yazılır; udsanız borc yaranmır. Faiz yoxdur. Cavab 30 saniyədir; rədd və ya cavabsızlıqda balans çatmırsa avtomatik pas olursunuz.`,
+      fields: [{ name: 'limit', label: 'Ümumi əlavə risk limiti (xal)', type: 'number', value: Math.ceil(need / 10) * 10 },
+        { name: 'dueDays', label: 'Qaytarma müddəti', type: 'select', value: '7', options: [['1', '1 gün'], ['3', '3 gün'], ['7', '7 gün'], ['14', '14 gün'], ['30', '30 gün']] }] };
+    render();
+  },
+  askLoanModal: (el) => {
+    const id = Number(el.dataset.id);
+    const m = S.room?.members.find((x) => x.id === id);
+    S.modal = { title: `💸 ${esc(azAblative(m?.name || ''))} borc istə`, kind: 'askLoan', lenderId: id, submitLabel: 'İstəyi göndər',
+      text: `Təsdiqlənənə qədər heç kimin balansı dəyişmir. Təsdiqdə xal onun mövcud balansından sizə keçir. Müddət çatanda qalan borc balansınızdan avtomatik tutulur (çatmasa qismən, qalanı sonra). Faiz yoxdur.`,
+      fields: [{ name: 'amount', label: 'Məbləğ (xal)', type: 'number' },
+        { name: 'days', label: 'Qaytarma müddəti', type: 'select', value: '7', options: [['1', '1 gün'], ['3', '3 gün'], ['7', '7 gün'], ['14', '14 gün'], ['30', '30 gün']] }] };
+    render();
+  },
   jackpotOpen: () => { if (confirm('Cəkpotu açırsınız? Raund dərhal bitəcək.')) act({ type: 'jackpotOpen' }); },
   jackpotHide: () => act({ type: 'jackpotHide' }),
   pickCard: (el) => { const i = Number(el.dataset.i); S.pick = S.pick === i ? null : i; render(); },
@@ -449,6 +448,8 @@ const H = {
   emoji: (el) => { send({ t: 'emoji', e: el.dataset.e }); if (S.emojiOpen) { S.emojiOpen = false; render(); } },
   toggleEmoji: () => { S.emojiOpen = !S.emojiOpen; render(); },
   toggleLog: () => { S.logOpen = !S.logOpen; render(); },
+  toggleShowHand: (el) => { S.showHand = S.showHand === el.dataset.hand ? null : el.dataset.hand; render(); },
+  toggleAnim: () => { const off = toggleAnimations(); if (off) clearGiftQueue(); toast(off ? 'Animasiyalar söndürüldü.' : 'Animasiyalar açıldı.', true); render(); },
   toggleSound: () => { const m = toggleMute(); toast(m ? 'Səs söndürüldü.' : 'Səs açıldı.', true); render(); },
   closeModal: () => { S.modal = null; render(); },
   closeModalBg: (el, ev) => { if (ev.target === el) { S.modal = null; render(); } },
@@ -470,7 +471,7 @@ const H = {
   },
   uReset: async (el) => {
     const u = S.admin.users.find((x) => x.id === byId(el));
-    if (!confirm(`${u.displayName}: köhnə mənfi balans ${fmt(u.balance)} → 0 oyun xalı.\nDüzəliş: +${fmt(-u.balance)}. Tarixçəyə yazılacaq; əvvəlki udma/uduzma tarixçəsi silinmir.\n\nTəsdiq edirsiniz?`)) return;
+    if (!confirm(`${u.displayName}: köhnə mənfi balans ${fmt(u.balance)} → 0 xal.\nDüzəliş: +${fmt(-u.balance)}. Tarixçəyə yazılacaq; əvvəlki udma/uduzma tarixçəsi silinmir.\n\nTəsdiq edirsiniz?`)) return;
     try { await api(`/api/admin/users/${u.id}/reset-negative`, { confirm: true }); toast('Mənfi balans sıfırlandı.', true); reloadAdmin(); } catch (e) { toast(e.message); reloadAdmin(); }
   },
   uName: (el) => {
@@ -490,6 +491,7 @@ const H = {
   },
   uTx: (el) => { S.admin.txUser = byId(el); S.adminTab = 'tx'; render(); reloadAdmin(); },
   ...profileHandlers(render, reloadProfile),
+  ...giftHandlers(render),
   ...adminHandlers(render, reloadAdmin),
 };
 
@@ -509,11 +511,14 @@ document.addEventListener('input', (ev) => {
   }
   if (t.id === 'tieOffer') S.tieOffer = t.checked;
   if (t.dataset.search) onSearchInput(t);
+  const tgs = t.closest?.('#tgSettings');
+  if (tgs) tgs.dataset.dirty = '1';
   if (t.id === 'adminSearch') { S.admin.q = t.value; S.admin.page = 1; refreshAdminList(); }
 });
 document.addEventListener('change', (ev) => {
   const t = ev.target;
   if (t.id === 'tieOffer') S.tieOffer = t.checked;
+  { const tgs = t.closest?.('#tgSettings'); if (tgs) tgs.dataset.dirty = '1'; }
   if (t.id === 'adminFilter') { S.admin.filter = t.value; S.admin.page = 1; refreshAdminList(); }
   if (t.type === 'file' && t.closest('form[data-form="avatar"]')) uploadAvatar(t.files[0], reloadProfile);
 });
@@ -535,9 +540,6 @@ document.addEventListener('submit', async (ev) => {
     if (kind === 'login') {
       const r = await api('/api/login', data);
       S.user = r.user; S.view = 'lobby'; render(); connect();
-    } else if (kind === 'register') {
-      const r = await api('/api/register', data);
-      toast(r.msg, true); S.authTab = 'login'; render();
     } else if (kind === 'join') {
       send({ t: 'joinRoom', code: data.code.trim().toUpperCase() });
     } else if (kind === 'create') {
@@ -547,14 +549,20 @@ document.addEventListener('submit', async (ev) => {
     } else if (kind === 'chat') {
       const text = String(data.text || '').trim();
       if (!text) return;
-      if (send({ t: 'chat', text })) { const i = form.querySelector('input'); i.value = ''; i.focus(); }
+      if (send({ t: 'chat', text })) { const i = form.querySelector('input'); i.value = ''; } // fokus onsuz da inputdadır — təkrar focus() çağırılmır
     } else if (PF[kind]) {
       await PF[kind](data, form, ev.submitter);
     } else if (AF[kind]) {
       await AF[kind](data, form, ev.submitter);
     } else if (kind === 'modal') {
       const m = S.modal;
-      if (m.kind === 'settings') {
+      if (m.kind === 'creditOffer') {
+        act({ type: 'creditOffer', limit: Number(data.limit), dueDays: Number(data.dueDays) });
+      } else if (m.kind === 'askLoan') {
+        const r = await moneyCall(`askLoan${m.lenderId}`, '/api/loans/request', { lenderId: m.lenderId, amount: Number(data.amount), dueAt: Date.now() + Number(data.days) * 86_400_000 });
+        if (!r) return;
+        toast(`İstək ${r.lenderName} üçün göndərildi. Təsdiqləyəndə xal balansınıza keçəcək.`, true);
+      } else if (m.kind === 'settings') {
         const settings = {};
         for (const [k] of SETTINGS_FIELDS) settings[k] = data[k];
         send({ t: 'roomMeta', meta: { name: data.name, visibility: data.visibility, password: data.password || '', removePassword: !!data.removePassword } });
@@ -581,17 +589,29 @@ document.addEventListener('submit', async (ev) => {
 });
 
 // iPhone klaviaturası açılanda görünən sahənin hündürlüyü (çat sətri klaviaturanın üstündə qalsın)
+// Məcburi scrollTo yoxdur (iPhone-da klaviatura açılanda təkrarlanan sürüşmə yaradırdı); dəyər yalnız dəyişəndə yazılır.
+let vvhRaf = 0; let lastVvh = 0;
 function syncViewport() {
-  const vv = window.visualViewport;
-  const h = vv ? vv.height : window.innerHeight;
-  document.documentElement.style.setProperty('--vvh', `${Math.round(h)}px`);
-  if (vv && S.view === 'room' && vv.offsetTop > 0 && document.activeElement?.id === 'chatInput') window.scrollTo(0, 0);
+  if (vvhRaf) return;
+  vvhRaf = requestAnimationFrame(() => {
+    vvhRaf = 0;
+    const vv = window.visualViewport;
+    const h = Math.round(vv ? vv.height : window.innerHeight);
+    if (Math.abs(h - lastVvh) < 2) return;
+    lastVvh = h;
+    document.documentElement.style.setProperty('--vvh', `${h}px`);
+  });
+}
+function isTyping() {
+  const a = document.activeElement;
+  return !!a && (a.nodeName === 'INPUT' || a.nodeName === 'TEXTAREA') && a.type !== 'checkbox' && a.type !== 'radio';
 }
 window.visualViewport?.addEventListener('resize', syncViewport);
 window.visualViewport?.addEventListener('scroll', syncViewport);
 window.addEventListener('resize', syncViewport);
 window.addEventListener('orientationchange', () => setTimeout(() => { syncViewport(); if (S.view === 'room') render(); }, 250));
 syncViewport();
+installPeek({ onPeekedAll: () => { if (S.view === 'room') render(); } });
 
 // ---------------- başlanğıc ----------------
 (async () => {

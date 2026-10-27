@@ -79,6 +79,11 @@ export class Store {
     return { token, user: u };
   }
 
+  async dropSessions(userId) { await this.db.run('DELETE FROM sessions WHERE user_id = $1', [userId]); }
+  async activeAdminCount() {
+    const r = await this.db.get(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'approved'`);
+    return Number(r.n);
+  }
   async logout(token) { await this.db.run('DELETE FROM sessions WHERE token = $1', [token]); }
 
   // approved və ya pending (demo) istifadəçi qaytarır
@@ -171,7 +176,7 @@ export class Store {
       await q.run(
         `INSERT INTO transactions(user_id, delta, balance_after, prev_balance, reason, by_user, kind, created_at)
          VALUES($1, $2, 0, $3, $4, $5, 'reset', $6)`,
-        [userId, -prev, prev, `Mənfi balans sıfırlandı (əvvəlki: ${prev} oyun xalı)`, adminId, now()],
+        [userId, -prev, prev, `Mənfi balans sıfırlandı (əvvəlki: ${prev} xal)`, adminId, now()],
       );
       return { prev, delta: -prev, balance: 0 };
     });
@@ -243,6 +248,21 @@ export class Store {
         const r = await q.run(`UPDATE rounds SET status = $1, finished_at = $2 WHERE uid = $3 AND status = 'active'`, [end.status, t, uid]);
         // eyni raund iki dəfə hesablanmır: status yalnız bir dəfə "active"-dən çıxır
         if (r.changes === 1 && end.status === 'finished') {
+          // "Borca oyna": uduzan borclunun faktiki istifadə etdiyi şərti məbləğ adi oyunçu borcu kimi yaranır
+          for (const l of end.loans || []) {
+            if (!(l.amount > 0) || l.borrower <= 0 || l.lender <= 0) continue;
+            const due = t + Math.max(1, Math.min(30, Number(l.dueDays) || 7)) * 86_400_000;
+            const row = await q.get(
+              `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at, accepted_at)
+               VALUES($1, $2, $3, $3, $4, 'active', $5, $6, $6) RETURNING id`,
+              [l.lender, l.borrower, l.amount, due, l.note || 'Borca oyun', t]);
+            const nm = await q.all('SELECT id, display_name FROM users WHERE id IN ($1, $2)', [l.borrower, l.lender]);
+            const name = (id) => nm.find((x) => Number(x.id) === id)?.display_name ?? '?';
+            await q.run('INSERT INTO notifications(user_id, kind, text, created_at) VALUES($1, $2, $3, $4)',
+              [l.borrower, 'loan', `${l.note || 'Borca oyun'}: ${name(l.lender)}-a borcunuz ${l.amount} xal (#${row.id}). Qaytarma müddəti çatanda avtomatik tutulur.`, t]);
+            await q.run('INSERT INTO notifications(user_id, kind, text, created_at) VALUES($1, $2, $3, $4)',
+              [l.lender, 'loan', `${l.note || 'Borca oyun'}: ${name(l.borrower)}-dan alacağınız ${l.amount} xal (#${row.id}).`, t]);
+          }
           for (const f of end.flows || []) {
             if (f.from < 0 || f.to < 0) continue; // botlar
             await q.run(

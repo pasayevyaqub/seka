@@ -9,9 +9,9 @@ export const S = {
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (n) => Math.abs(n).toLocaleString('az-AZ').replace(/,/g, ' ');
-export const fmt = (n) => `${n < 0 ? '−' : ''}${num(Number(n) || 0)} oyun xalı`;
+export const fmt = (n) => `${n < 0 ? '−' : ''}${num(Number(n) || 0)} xal`;
 export const money = (n) => `<span class="coin ${n < 0 ? 'neg' : ''}">${fmt(n)}</span>`;
-export const fmtCents = (c, sign = false) => `${c < 0 ? '−' : sign && c > 0 ? '+' : ''}${(Math.abs(c) / 100).toFixed(2)} oyun xalı`;
+export const fmtCents = (c, sign = false) => `${c < 0 ? '−' : sign && c > 0 ? '+' : ''}${(Math.abs(c) / 100).toFixed(2)} xal`;
 export const isStaff = () => S.user && S.user.status === 'approved' && (S.user.role === 'admin' || S.user.role === 'moderator');
 export const isAdmin = () => S.user && S.user.status === 'approved' && S.user.role === 'admin';
 export const isDemo = () => S.user && S.user.status !== 'approved';
@@ -66,13 +66,28 @@ export async function moneyCall(name, path, body) {
   } finally { inflight.delete(name); }
 }
 
+// Bot avatarı — orijinal SVG robot (ağ dəbilqə, tünd üz paneli, mavi gözlər)
+const ROBOT = `<svg viewBox="0 0 64 64" class="robot" aria-hidden="true">
+  <defs><radialGradient id="rbBg" cx=".5" cy=".35" r=".75"><stop offset="0" stop-color="#2c3e52"/><stop offset="1" stop-color="#0d1621"/></radialGradient>
+  <linearGradient id="rbShell" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#b9c3cf"/></linearGradient></defs>
+  <rect width="64" height="64" fill="url(#rbBg)"/>
+  <path d="M12 64 Q14 46 32 45 Q50 46 52 64 Z" fill="url(#rbShell)"/>
+  <rect x="24" y="52" width="16" height="7" rx="2" fill="#1b2633"/><text x="32" y="57.6" text-anchor="middle" font-size="5" font-weight="700" fill="#cfe3ff" font-family="system-ui,sans-serif">BOT</text>
+  <ellipse cx="32" cy="28" rx="17" ry="16" fill="url(#rbShell)"/>
+  <rect x="11" y="24" width="5" height="10" rx="2.5" fill="#9aa6b4"/><rect x="48" y="24" width="5" height="10" rx="2.5" fill="#9aa6b4"/>
+  <rect x="19" y="20" width="26" height="15" rx="7.5" fill="#0b121b"/>
+  <circle cx="26" cy="27.5" r="3.4" fill="#4fb3ff"/><circle cx="38" cy="27.5" r="3.4" fill="#4fb3ff"/>
+  <circle cx="26" cy="27.5" r="6" fill="#4fb3ff" opacity=".22"/><circle cx="38" cy="27.5" r="6" fill="#4fb3ff" opacity=".22"/>
+  <path d="M20 16 Q32 9 44 16" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="1.5"/>
+</svg>`;
+
 export function avatarHTML(u, cls = '') {
   const name = u?.displayName ?? u?.name ?? '?';
-  if (u?.isBot) return `<span class="avatar ${cls} bot" aria-hidden="true">🤖</span>`;
+  if (u?.isBot) return `<span class="avatar ${cls} bot" aria-hidden="true">${ROBOT}</span>`;
   if (u?.avatarVer && u?.id > 0) return `<img class="avatar ${cls}" src="/api/avatar/${u.id}?v=${u.avatarVer}" alt="" loading="lazy">`;
   const ch = esc(String(name).trim().charAt(0).toLocaleUpperCase('az') || '?');
   let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return `<span class="avatar ${cls} initial" style="background:hsl(${h} 45% 35%)" aria-hidden="true">${ch}</span>`;
+  return `<span class="avatar ${cls} initial" style="background:radial-gradient(circle at 35% 30%, hsl(${h} 40% 46%), hsl(${h} 45% 22%))" aria-hidden="true">${ch}</span>`;
 }
 
 export const KIND_LABEL = {
@@ -80,8 +95,9 @@ export const KIND_LABEL = {
   credit: 'Kredit', credit_repay: 'Kredit ödənişi', gift_out: 'Hədiyyə (göndərildi)', gift_in: 'Hədiyyə (alındı)',
   loan_out: 'Borc verildi', loan_in: 'Borc alındı', loan_repay_out: 'Borc ödənişi', loan_repay_in: 'Borc qaytarıldı',
   loan_auto_out: 'Avtomatik tutulma', loan_auto_in: 'Avtomatik ödəniş alındı',
+  tgift_out: 'Masa hədiyyəsi (göndərildi)', tgift_in: 'Masa hədiyyəsi (alındı)',
 };
-export const LOAN_STATUS = { offered: 'Təklif', active: 'Aktiv', overdue: 'Gecikib', paid: 'Ödənilib', declined: 'Rədd edilib', cancelled: 'Ləğv edilib' };
+export const LOAN_STATUS = { requested: 'Borc istəyi', offered: 'Təklif', active: 'Aktiv', overdue: 'Gecikib', paid: 'Ödənilib', declined: 'Rədd edilib', cancelled: 'Ləğv edilib' };
 
 export function txList(items, showUser) {
   if (!items?.length) return '<p class="muted">Əməliyyat yoxdur.</p>';
@@ -94,3 +110,20 @@ export function txList(items, showUser) {
 }
 
 export const deadlineSpan = (deadline) => `<span data-countdown="${deadline}"></span>`;
+
+// Azərbaycan dilində hal şəkilçiləri (adlar üçün): yönlük "Anara/Leylaya", çıxışlıq "Yaqubdan/Elvindən"
+const BACKV = 'aıou'; const FRONTV = 'eəiöü';
+function lastVowel(n) { let v = ''; for (const ch of n.toLocaleLowerCase('az')) if (BACKV.includes(ch) || FRONTV.includes(ch)) v = ch; return v; }
+export function azDative(name) {
+  const n = String(name || '').trim(); const last = n.slice(-1).toLocaleLowerCase('az');
+  if (!/\p{L}/u.test(last)) return `${n}-a`;
+  const back = !lastVowel(n) || BACKV.includes(lastVowel(n));
+  const vEnd = BACKV.includes(last) || FRONTV.includes(last);
+  return n + (vEnd ? (back ? 'ya' : 'yə') : (back ? 'a' : 'ə'));
+}
+export function azAblative(name) {
+  const n = String(name || '').trim(); const last = n.slice(-1);
+  if (!/\p{L}/u.test(last)) return `${n}-dan`;
+  const back = !lastVowel(n) || BACKV.includes(lastVowel(n));
+  return n + (back ? 'dan' : 'dən');
+}

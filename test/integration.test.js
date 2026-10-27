@@ -44,7 +44,8 @@ let adminCookie;
 async function admin() { if (!adminCookie) adminCookie = await login('admin', 'admin123'); return adminCookie; }
 
 async function makeUser(username, { balance = 0 } = {}) {
-  const r = await http('/api/register', { body: { username, displayName: username[0].toUpperCase() + username.slice(1), password: '123456' } });
+  const adm = await admin();
+  const r = await http('/api/admin/users', { body: { username, displayName: username[0].toUpperCase() + username.slice(1), password: '123456' }, cookie: adm });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const u = await app.db.get('SELECT id FROM users WHERE username = $1', [username]);
   // test hazırlığı: balansı birbaşa təyin edirik (qeydiyyat bonusu ayrıca testdə yoxlanılır)
@@ -81,7 +82,7 @@ const dbGet = (sql, p) => app.db.get(sql, p);
 const dbAll = (sql, p) => app.db.all(sql, p);
 
 // ---------------------------------------------------------------
-test('demo: 1 insan + 5 bot, hər girişdə 10 000 demo oyun xalı, əsas balans/statistika dəyişmir', async () => {
+test('demo: 1 insan + 5 bot, hər girişdə 10 000 demo xal, əsas balans/statistika dəyişmir', async () => {
   const id = await makeUser('demo1', { balance: 0 });
   const c = await client('demo1');
   c.send({ t: 'createRoom', demo: true, bots: 5, name: 'Demo' });

@@ -5,7 +5,11 @@ import { cardSVG, cardBackSVG } from './cards.js';
 import { score3 } from './score.js';
 import { potStackHTML, noteSVG } from './notes.js';
 import { isMuted } from './sound.js';
+import { animationsOff } from './giftfx.js';
 import { flipKey } from './fx.js';
+import { decorHTML, FELT_MEDALLION } from './decor.js';
+import { peekCardHTML, peekedAll, hintNeeded } from './peek.js';
+import { ICON } from './giftfx.js';
 import { S, esc, fmt, avatarHTML, deadlineSpan, isDemo } from './core.js';
 
 export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
@@ -76,24 +80,32 @@ export function showBubble(msg) {
 }
 
 // ---------------- üst panel ----------------
+// Üst panel ikonları — sadə xətti SVG (istinad şəklindəki kimi)
+const IC = {
+  back: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4l-8 8 8 8"/></svg>',
+  sound: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>',
+  mute: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  fs: '<svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>',
+  fsx: '<svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg>',
+  coins: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="#e2bd5a" stroke="#8a6420" stroke-width=".8"><ellipse cx="12" cy="18" rx="8" ry="3"/><path d="M4 18v-2.5c0 1.7 3.6 3 8 3s8-1.3 8-3V18"/><ellipse cx="12" cy="13.5" rx="8" ry="3"/><path d="M4 13.5V11c0 1.7 3.6 3 8 3s8-1.3 8-3v2.5"/><ellipse cx="12" cy="9" rx="8" ry="3"/><path d="M4 9V6.5c0 1.7 3.6 3 8 3s8-1.3 8-3V9"/><ellipse cx="12" cy="5" rx="8" ry="3" fill="#f2d27a"/></g></svg>',
+};
+
 function roomBar(room, fs) {
   const me = room.members.find((m) => m.id === S.user.id);
   const practice = room.practice;
   const bal = practice ? (me?.balance ?? 0) : S.user.balance;
   const canCredit = !practice && !isDemo();
+  const balInner = `<span class="coin-ico" aria-hidden="true">${IC.coins}</span><b ${practice ? '' : 'id="myBalance"'} class="${bal < 0 ? 'neg' : ''}">${fmt(bal)}</b>`;
   return `<header class="rbar">
-    <button class="rb-btn" data-a="leave" aria-label="Otaqdan çıx" title="Otaqdan çıx">‹</button>
-    <div class="rb-title"><b>${esc(room.name)}${room.visibility === 'private' ? ' <span title="Gizli otaq">🙈</span>' : ''}</b>
-      <small>${room.members.length}/${room.settings.maxPlayers} oyunçu · Seka${room.demo ? ' · Demo' : practice ? ' · Məşq' : ''}</small></div>
-    <button class="rb-code" data-a="copyCode" title="Kodu kopyala" aria-label="Otaq kodu ${room.code}, kopyala">${room.hasPassword ? '🔒' : ''}${room.code}<span aria-hidden="true">⧉</span></button>
-    <div class="rb-bal ${practice ? 'practice' : ''}">
-      <div class="rb-bal-txt"><small>${practice ? 'Məşq balansı' : 'Virtual oyun balansı'}</small>
-        <b ${practice ? '' : 'id="myBalance"'} class="${bal < 0 ? 'neg' : ''}">${fmt(bal)}</b></div>
-      ${canCredit ? '<button class="rb-plus" data-a="creditModal" aria-label="Kredit istə" title="Kredit istə">+</button>' : ''}
-    </div>
-    <button class="rb-btn" data-a="toggleSound" aria-label="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}" title="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}">${isMuted() ? '🔇' : '🔊'}</button>
-    <button class="rb-btn" data-a="${fs ? 'fsExit' : 'fsEnter'}" aria-label="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}" title="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}">${fs ? '⤡' : '⤢'}</button>
-    <button class="rb-btn bell" data-a="openNotifications" aria-label="Bildirişlər">🔔<span id="bellCount" class="bell-count ${S.unread > 0 ? '' : 'hidden'}">${S.unread || ''}</span></button>
+    <button class="rb-btn back" data-a="leave" aria-label="Otaqdan çıx" title="Otaqdan çıx">${IC.back}</button>
+    <button class="rb-title" data-a="toggleLog" title="Otaq menyusu: oyunçular, bildirişlər, ayarlar, çat" aria-label="${esc(room.name)} — otaq menyusu, ${room.members.length}/${room.settings.maxPlayers} oyunçu"><span class="rb-ppl" aria-hidden="true"><span id="bellCount" class="bell-count ${S.unread > 0 ? '' : 'hidden'}">${S.unread || ''}</span></span><b>${esc(room.name)}</b></button>
+    <button class="rb-code" data-a="copyCode" title="Kodu kopyala" aria-label="Otaq kodu ${room.code}, kopyala">${room.hasPassword ? '🔒' : ''}${room.code}</button>
+    <span class="rb-gap"></span>
+    <button class="rb-btn" data-a="toggleSound" aria-label="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}" title="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}">${isMuted() ? IC.mute : IC.sound}</button>
+    <button class="rb-btn" data-a="${fs ? 'fsExit' : 'fsEnter'}" aria-label="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}" title="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}">${fs ? IC.fsx : IC.fs}</button>
+    ${canCredit
+      ? `<button class="rb-bal" data-a="creditModal" title="Virtual oyun balansı — kredit istəmək üçün toxunun" aria-label="Balans ${fmt(bal)}, kredit istə">${balInner}</button>`
+      : `<div class="rb-bal practice" title="Məşq balansı">${balInner}</div>`}
   </header>`;
 }
 
@@ -101,7 +113,7 @@ function roomBar(room, fs) {
 function ring(deadline, totalSec) {
   return `<svg class="ring" viewBox="0 0 60 60" data-ring="${deadline}" data-total="${totalSec}" aria-hidden="true">
     <circle class="trk" cx="30" cy="30" r="27.5"/><circle class="prog" cx="30" cy="30" r="27.5" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/></svg>
-    <span class="cd" data-secs="${deadline}"></span>`;
+    <span class="cd" data-secs="${deadline}" data-unit=" san"></span>`;
 }
 
 function seatTimer(p, r, room) {
@@ -111,66 +123,58 @@ function seatTimer(p, r, room) {
   return '';
 }
 
-// Öz yerim: avatar (vaxt halqası, emoji/çat balonu) + kartlarım + xal
-function meZone(room, seats, handHTML) {
-  const p = seats.find((x) => x.id === S.user.id);
-  if (!p) return handHTML ? `<div class="mezone">${handHTML}</div>` : '';
-  const r = room.round;
-  const isTurn = r && r.phase === 'betting' && r.turn === p.id;
-  const won = r?.phase === 'finished' && r.result && r.result.how !== 'aborted' && r.result.winners.includes(p.id);
-  return `<div class="mezone">
-    <div class="me-seat ${isTurn ? 'turn' : ''} ${won ? 'won' : ''}" data-seat="${p.id}">
-      <div class="av">${seatTimer(p, r, room)}${avatarHTML(p, 'seat-av')}
-        ${room.hostId === p.id ? '<span class="host" title="Otaq sahibi">👑</span>' : ''}
-        <div class="bubble-slot">${bubbleHTML(p.id)}</div></div>
-      <div class="nm-pill">${esc(p.name)}</div>
-      ${statusTag(p, r)}
-    </div>
-    ${handHTML}
-  </div>`;
-}
-
 const tagSvg = (svg, attr) => svg.replace('<svg ', `<svg ${attr} `);
+
+// Oturacaqlar masanın içində, kənara yaxın. Mənim yerim aşağıda ortadadır, kartlarım masanın aşağı kənarının üstündə.
+// İstinad şəklindəki kimi: oturacaqlar masanın içində, kənarlara yaxın. Sıra saat əqrəbi istiqamətində:
+// mən (aşağı orta) → sol aşağı → sol yuxarı → yuxarı → sağ yuxarı → sağ aşağı.
+const LAYOUT = {
+  2: [[50, 7]],
+  3: [[19, 28], [81, 28]],
+  4: [[18, 42], [50, 6], [82, 42]],
+  5: [[18, 47], [18, 19], [82, 19], [82, 47]],
+  6: [[18, 47], [18, 19], [50, 6], [82, 19], [82, 47]],
+  7: [[16, 54], [16, 29], [33, 7], [67, 7], [84, 29], [84, 54]],
+  8: [[15, 57], [15, 34], [27, 11], [50, 3], [73, 11], [85, 34], [85, 57]],
+};
+function seatPos(i, n, myIdx) {
+  const rel = (i - myIdx + n) % n;
+  // geniş (üfüqi) masa üçün ayrıca yerlər: ellips boyunca; mən aşağı solda (kartlarımın yanında)
+  const ang = ((90 + (rel * 360) / n) * Math.PI) / 180;
+  const wide = rel === 0 ? { wx: 11, wy: 85 } : { wx: 50 + 38 * Math.cos(ang) - 6, wy: 47 + 37 * Math.sin(ang) };
+  if (rel === 0) return { x: 50, y: 64, ...wide };
+  const [x, y] = (LAYOUT[n] || LAYOUT[8])[rel - 1] || [50, 7];
+  return { x, y, ...wide };
+}
 
 function renderSeat(p, i, n, myIdx, room, ord) {
   const r = room.round;
-  const ang = ((90 + ((i - myIdx) * 360) / n) * Math.PI) / 180;
-  const cx = Math.cos(ang);
-  const cy = Math.sin(ang);
-  const x = 50 + 50 * cx;
-  const y = 50 + 50 * cy;
+  const pos = seatPos(i, n, myIdx);
   const isMe = p.id === S.user.id;
-  if (isMe) return ''; // öz yerim masanın altındakı "mezone"-dadır
   const isTurn = r && r.phase === 'betting' && r.turn === p.id;
-  const choosing = r && r.phase === 'discard' && p.inHand && p.status === 'active' && !p.discarded;
   const out = ['folded', 'lost', 'out'].includes(p.status);
   const won = r?.phase === 'finished' && r.result && r.result.how !== 'aborted' && r.result.winners.includes(p.id);
-  // kartlar masanın mərkəzinə doğru (yuxarı oturacaqlarda ad lövhəsi altda olduğu üçün bir az uzaq)
-  const dist = cy < -0.3 ? 92 : n >= 6 ? 46 : 56;
-  const dx = Math.round(-cx * dist);
-  const dy = Math.round(-cy * dist);
   let cards = '';
   if (p.inHand && !isMe) {
     if (p.cards) cards = p.cards.map((c) => tagSvg(cardSVG(c), `data-flip="${flipKey(r.handNo, p.id)}"`)).join('');
     else cards = Array.from({ length: p.cardCount }, (_, j) => tagSvg(cardBackSVG(), `data-deal="${j * ord.n + ord.idx}"`)).join('');
   }
-  const stakeNote = p.put >= 100 ? 100 : p.put >= 50 ? 50 : p.put >= 20 ? 20 : p.put >= 10 ? 10 : p.put >= 5 ? 5 : 1;
-  const stake = r && p.put > 0 && r.phase !== 'finished' && !isMe ? `<div class="stake">${noteSVG(stakeNote)}<b>${fmt(p.put)}</b></div>` : '';
-  const timer = seatTimer(p, r, room);
+  const giftable = !room.practice && !isMe && !p.isBot && p.id > 0 && p.inRoom;
   return `<div class="seat ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''} ${out ? 'out' : ''} ${won ? 'won' : ''} ${p.connected ? '' : 'offline'}"
-      style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%" data-seat="${p.id}">
-    ${cards || stake ? `<div class="seat-cards ${cy < -0.3 ? 'top' : ''}" style="--dx:${dx}px;--dy:${dy}px">${cards ? `<div class="sc-row">${cards}</div>` : ''}
-      ${p.score != null && !isMe ? `<span class="sc-score">${p.score} xal</span>` : ''}${stake}</div>` : ''}
-    <div class="av">
-      ${timer}
+      style="--x:${pos.x.toFixed(2)}%;--y:${pos.y.toFixed(2)}%;--wx:${pos.wx.toFixed(2)}%;--wy:${pos.wy.toFixed(2)}%" data-seat="${p.id}">
+    <div class="av" ${giftable ? `data-a="giftModal" data-id="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)} — hədiyyə göndər" title="Hədiyyə göndər"` : ''}>
+      ${seatTimer(p, r, room)}
       ${avatarHTML(p, 'seat-av')}
       ${room.hostId === p.id ? '<span class="host" title="Otaq sahibi">👑</span>' : ''}
       ${p.isBot ? '<span class="botmark" title="Bot">BOT</span>' : ''}
       <div class="bubble-slot">${bubbleHTML(p.id)}</div>
     </div>
-    <div class="nm-pill">${esc(p.name)}${isMe ? ' <small>(siz)</small>' : ''}</div>
+    <div class="nm-pill">${esc(p.name)}</div>
     <div class="bal-pill ${p.balance < 0 ? 'neg' : ''}">${fmt(p.balance)}</div>
     ${statusTag(p, r)}
+    ${cards ? `<div class="sc-row">${cards}</div>` : ''}
+    ${p.score != null && !isMe ? `<span class="sc-score">${p.score} xal</span>` : ''}
+    ${p.creditPut ? `<span class="credit-chip" title="Borca (şərti) qoyuluş">🧾 borca ${fmt(p.creditPut)}</span>` : ''}
   </div>`;
 }
 
@@ -194,12 +198,11 @@ function centerHTML(room) {
   }
   return `<div class="ctr">
     ${r.isSeka || r.phase === 'sekaJoin' ? '<div class="seka-badge">SEKA</div>' : ''}
+    <div class="bankbox"><small>BANK</small><b>${fmt(r.pot)}</b>${r.creditPot ? `<span class="credit-pot" title="Borca (şərti) qoyuluş — real xal deyil, raund sonunda ayrıca hesablanır">🧾 +${fmt(r.creditPot)} borca</span>` : ''}${r.phase === 'betting' ? `<i>Cari xod: ${fmt(Math.max(r.currentBet, r.minXod))}</i>` : ''}</div>
     <div class="pot-row">
       <div class="deck" id="deckAnchor">${cardBackSVG()}${cardBackSVG()}</div>
       <div class="pot-notes" id="potAnchor">${potStackHTML(r.pot)}</div>
     </div>
-    <div class="bankbox"><small>BANK</small><b>${fmt(r.pot)}</b><i>Virtual oyun balansı</i></div>
-    ${r.phase === 'betting' ? `<div class="cur-bet">Cari xod: <b>${fmt(Math.max(r.currentBet, r.minXod))}</b></div>` : ''}
     ${banner}
   </div>`;
 }
@@ -279,38 +282,56 @@ function actionsHTML(room) {
       const myBal = r.players.find((p) => p.id === uid)?.balance ?? 0;
       const max = Math.min(myBal, r.maxBet > 0 ? Math.max(r.maxBet, min) : Infinity);
       if (S.bet == null || S.bet < min || S.bet > max) S.bet = Math.min(min, max);
-      const low = !me.canAffordMin ? (real ? lowBalanceHTML(min) : `<div class="notice">Məşq balansınız ${fmt(min)} üçün çatmır.</div>`) : '';
+      const low = !me.canAffordMin && !me.canCreditOffer ? (real ? lowBalanceHTML(min) : `<div class="notice">Məşq balansınız ${fmt(min)} üçün çatmır.</div>`) : '';
+      const d = r.creditDeal;
+      const dealLine = d && d.debtor === uid ? `<div class="credit-line">🧾 Borca oyun: limit <b>${fmt(d.limit)}</b>, istifadə <b>${fmt(d.used)}</b>, qalıq <b>${fmt(d.limit - d.used)}</b> (${nameOf(d.creditor)} ilə razılaşma)</div>` : '';
+      const creditBtn = me.canCreditOffer ? `<button class="ob credit" data-a="creditOfferModal">🤝 ${d ? 'Borca limiti artır' : 'Borca oyna'}${me.creditShortfall ? ` · çatışmır ${fmt(me.creditShortfall)}` : ''}</button>` : '';
       const pasBtn = me.canPas
         ? '<button class="bb pas" data-a="pas">Pas</button>'
-        : '<button class="bb pas locked" disabled title="Cəkpot sahibi pas edə bilməz">🔒 Pas</button>';
-      return `${secret}${low}
-        <div class="betline">
-          <button class="bl-step" data-a="betStep" data-v="-1" aria-label="Xodu azalt">−</button>
-          <label class="bl-val"><small>Xod (oyun xalı)</small>
-            <input id="bet" type="number" inputmode="numeric" value="${S.bet}" min="${min}" ${Number.isFinite(max) ? `max="${max}"` : ''} aria-label="Xod məbləği (oyun xalı)"></label>
-          <button class="bl-step" data-a="betStep" data-v="1" aria-label="Xodu artır">+</button>
-          <button class="bl-q" data-a="betSet" data-v="${min}">Min</button>
-          <button class="bl-q" data-a="betSet" data-v="${Number.isFinite(max) ? Math.min(max, min * 2) : min * 2}">×2</button>
-        </div>
-        <div class="big3">
+        : '<button class="bb pas locked" disabled title="Cəkpot sahibi pas edə bilməz" aria-label="Pas kilidlidir">🔒</button>';
+      const baxisTip = me.canBaxis ? `${nameOf(me.baxisTarget)} ilə baxış · ${fmt(min)}` : (me.baxisHint || 'Baxış hələ mümkün deyil.');
+      return `${secret}${low}${dealLine}${creditBtn}
+        <div class="ctl-row">
+          <div class="stepper">
+            <button class="st-b" data-a="betStep" data-v="-1" aria-label="Xodu azalt">−</button>
+            <label class="st-v"><input id="bet" type="number" inputmode="numeric" value="${S.bet}" min="${min}" ${Number.isFinite(max) ? `max="${max}"` : ''} aria-label="Xod məbləği (xal)"><span>xal</span></label>
+            <button class="st-b" data-a="betStep" data-v="1" aria-label="Xodu artır">+</button>
+          </div>
           ${pasBtn}
-          <button class="bb baxis" data-a="baxis" ${me.canBaxis && me.canAffordMin ? '' : 'disabled'}>Baxış<small>${me.canBaxis ? `${nameOf(me.baxisTarget)} · ${fmt(min)}` : 'hələ yox'}</small></button>
-          <button class="bb xod" data-a="xod" ${me.canAffordMin ? '' : 'disabled'}>Xod<small id="xodAmt">${fmt(S.bet)}</small></button>
+          <button class="bb baxis" data-a="baxis" title="${baxisTip}" ${me.canBaxis && me.canAffordMin ? '' : 'disabled'}>Baxış</button>
+          <button class="bb xod" data-a="xod" ${me.canAffordMin ? '' : 'disabled'}>Xod et</button>
         </div>
-        ${me.canBaxis ? '' : `<div class="hint">ℹ️ ${esc(me.baxisHint || 'Baxış hələ mümkün deyil.')}</div>`}
+        <div class="hint">${me.canBaxis ? `Baxış: ${nameOf(me.baxisTarget)} · ${fmt(min)}` : esc(me.baxisHint || 'Baxış hələ mümkün deyil.')}</div>
         ${me.canBaxis && r.activeCount > 2 ? `<label class="check"><input type="checkbox" id="tieOffer" ${S.tieOffer ? 'checked' : ''}> Baxışda "eyni xala baxaq" təklif et</label>` : ''}
         ${r.activeCount === 2 ? `<div class="offer2">
-          <button class="ob" data-a="offerSeka" ${me.canOffer ? '' : 'disabled'}>🤝 Seka təklif et</button>
-          <button class="ob" data-a="offerSplit" ${me.canOffer ? '' : 'disabled'}>½ Bankı bölək</button></div>
-          ${me.canOffer ? '' : '<div class="hint">Təklif raundda bir dəfə, 2 oyunçu qalanda və növbə vaxtı bitməmiş edilə bilər.</div>'}` : ''}`;
+          <button class="ob" data-a="offerSeka" ${me.canOffer ? '' : 'disabled'} title="2 oyunçu qalanda, raundda bir dəfə">🤝 Seka təklif et</button>
+          <button class="ob" data-a="offerSplit" ${me.canOffer ? '' : 'disabled'} title="2 oyunçu qalanda, raundda bir dəfə">½ Bankı bölək</button></div>` : ''}`;
     }
     if (me?.status === 'active') {
-      return `${secret}<div class="notice turn-info">Növbə: <b>${nameOf(r.turn)}</b> ${deadlineSpan(r.turnDeadline)}</div>
-        ${me.canVote ? `<button class="bb pas wide" data-a="votePas">${nameOf(r.turn)} üçün "Pas" səsi ver (${r.votes}/${r.votesNeeded})</button>` : ''}`;
+      const d2 = r.creditDeal;
+      const credInfo = d2 ? `<div class="credit-line">🧾 ${d2.debtor === uid ? `Borca oyun limitiniz: ${fmt(d2.limit)} (istifadə ${fmt(d2.used)})` : `${nameOf(d2.debtor)} sizin razılığınızla ${fmt(d2.limit)}-dək borca oynayır (istifadə ${fmt(d2.used)})`}</div>` : '';
+      return `${secret}${credInfo}<div class="ctl-row wait">
+          <div class="turn-chip">Növbə: <b>${nameOf(r.turn)}</b> <span data-secs="${r.turnDeadline}" data-unit=" san"></span></div>
+          ${me.canVote ? `<button class="bb pas" data-a="votePas" title="${nameOf(r.turn)} vaxtı keçirdi">Pas səsi ${r.votes}/${r.votesNeeded}</button>` : ''}
+        </div>`;
     }
     if (me?.status === 'attached') return `<div class="notice">Şəriksiniz: <b>${nameOf(me.attachedTo)}</b> qalib gəlsə bank bölünəcək.</div>`;
     if (me) return `<div class="notice">${me.status === 'folded' ? 'Pas dediniz.' : 'Bu raunddan çıxdınız.'} Növbə: <b>${nameOf(r.turn)}</b></div>`;
     return `<div class="notice">Raund gedir. Növbəti raundu gözləyin.</div>`;
+  }
+
+  if (r.phase === 'creditOffer') {
+    const p = r.pending;
+    const terms = `Çatışmayan məbləğ: <b>${fmt(p.shortfall)}</b> · Ümumi əlavə risk limiti: <b>${fmt(p.limit)}</b>${p.prevLimit ? ` (əvvəl ${fmt(p.prevLimit)}, istifadə olunub ${fmt(p.used)})` : ''} · Qaytarma müddəti: <b>${p.dueDays} gün</b>`;
+    if (p.to === uid) {
+      return `<div class="credit-offer">
+        <div><b>${nameOf(p.from)}</b>: "<b>${fmt(p.limit)}</b>-dək borca oynamağı qəbul edirsən?" <span data-secs="${p.deadline}" data-unit=" san"></span></div>
+        <div class="co-terms">${terms}</div>
+        <div class="muted" style="font-size:12px">Qəbul etsəniz, ${nameOf(p.from)} balansı bitəndə bu limit daxilində oynaya bilər. Uduzsa, yalnız faktiki istifadə etdiyi təminatsız məbləğ sizə borc yazılır (adi oyunçu borcu kimi, müddət çatanda avtomatik tutulur). Udsa, borc yaranmır. Rədd etsəniz və ya 30 saniyədə cavab verməsəniz, balansı çatmayan oyunçu avtomatik pas olur.</div>
+        <div class="big2"><button class="bb xod" data-a="creditAccept" data-limit="${p.limit}">Qəbul et</button><button class="bb pas" data-a="creditDecline">Rədd et</button></div></div>`;
+    }
+    if (p.from === uid) return `<div class="credit-offer"><div>Borca oyun təklifiniz göndərildi — ${nameOf(p.to)} cavab verir… <span data-secs="${p.deadline}" data-unit=" san"></span></div><div class="co-terms">${terms}</div><div class="muted" style="font-size:12px">Növbə vaxtınız gözləmə müddətində dayanıb.</div></div>`;
+    return `<div class="notice">${nameOf(p.from)} ${nameOf(p.to)}-a borca oyun təklif edib… ${deadlineSpan(p.deadline)}</div>`;
   }
 
   if (r.phase === 'offer') {
@@ -346,30 +367,66 @@ function actionsHTML(room) {
   if (r.phase === 'sekaJoin') {
     const sjn = r.sekaJoin;
     const joined = sjn.joined.map(nameOf).join(', ') || 'hələ heç kim';
-    let html = `<div class="notice"><b>SEKA!</b> Bank növbəti raunda keçir. Qoşulanlar: ${joined}. ${deadlineSpan(sjn.deadline)}</div>`;
-    if (sjn.eligible.includes(uid) && !sjn.joined.includes(uid)) html += `<button class="bb xod wide" data-a="sekaJoin">Sekaya qoşul (${fmt(sjn.cost)})</button>`;
-    if (sjn.base.includes(uid)) html += `<button class="bb baxis wide" data-a="sekaStart">Sekanı başlat</button>`;
+    const waiting = sjn.waiting || [];
+    const canDecide = sjn.eligible.includes(uid) && !sjn.joined.includes(uid) && !(sjn.skipped || []).includes(uid);
+    let html = `<div class="seka-join">
+      <div class="sj-head"><b>SEKA!</b> Bank növbəti əlinə keçir. Qoşulmaq: <b>${fmt(sjn.cost)}</b></div>
+      <div class="sj-timer">Qalan vaxt: <b data-secs="${sjn.deadline}" data-unit=" san"></b></div>
+      <div class="sj-meta">Qoşulanlar: ${joined}${waiting.length ? ` · Gözlənilir: ${waiting.map(nameOf).join(', ')}` : ''}</div></div>`;
+    if (canDecide) html += `<div class="big2"><button class="bb xod" data-a="sekaJoin">Sekaya qoşul (${fmt(sjn.cost)})</button><button class="bb pas" data-a="sekaSkip">Qoşulmuram</button></div>`;
+    if (sjn.base.includes(uid)) {
+      html += `<button class="bb baxis wide" data-a="sekaStart" ${waiting.length ? 'disabled' : ''}>Sekanı başlat</button>`;
+      if (waiting.length) html += `<div class="hint">Qoşulmaq hüququ olan oyunçular qərar verənə və ya vaxt bitənə qədər başlatmaq olmaz. Vaxt bitəndə seka qoşulanlarla avtomatik başlayır.</div>`;
+    }
     return html;
   }
   return '';
 }
 
 // ---------------- öz kartlarım ----------------
-function myHandHTML(r, ord) {
+function myHandHTML(r, ord, room) {
   const me = r?.me;
   if (!me) return '';
-  const deal = (svg, j) => tagSvg(svg, `data-deal="${j * ord.n + ord.idx}"`);
-  if (r.phase === 'discard' && me.mustDiscard) {
+  const pickPhase = r.phase === 'discard' && me.mustDiscard;
+  const cards = pickPhase ? me.hand : (me.cards || me.hand);
+  // əl açarı: raund + kart sayı (4 kartdan biri atılanda yeni əl sayılır)
+  const hand = `${room.code}-${r.handNo}-${cards.length}`;
+  if (pickPhase) {
     const key = `${r.handNo}`;
     if (S.pickKey !== key) { S.pick = null; S.pickKey = key; }
-    const keep = S.pick != null ? me.hand.filter((_, i) => i !== S.pick) : null;
-    return `<div class="my-hand pick">${me.hand.map((c, i) => `<button class="card-btn ${S.pick === i ? 'selected' : ''}" data-a="pickCard" data-i="${i}" aria-label="kartı seç">${deal(cardSVG(c), i)}${S.pick === i ? '<span class="x">ATILIR</span>' : ''}</button>`).join('')}</div>
-      <div class="xal-badge ${keep ? '' : 'dim'}">${keep ? `${score3(keep)} xal` : 'Atılacaq kartı seçin'}</div>`;
   }
-  const cards = me.cards || me.hand;
-  return `<div class="my-hand">${cards.map((c, j) => `<span class="mh-slot">${deal(cardSVG(c), j)}</span>`).join('')}</div>
-    ${me.score != null ? `<div class="xal-badge">${me.score} xal</div>` : ''}
+  const finished = r.phase === 'finished';
+  // "Öz kartlarımı göstər" yalnız bu cihazda açır; raund bitəndə öz kartlarım açıq görünür
+  const open = S.showHand === hand || finished;
+  const dealAttr = (j) => `data-deal="${j * ord.n + ord.idx}"`;
+  const faceUp = (c, j) => `<span class="flip3d" ${dealAttr(j)}>${cardBackSVG('bf')}${cardSVG(c)}</span>`;
+  const slots = cards.map((c, j) => `<div class="mh-slot ${pickPhase && S.pick === j ? 'selected' : ''}">
+      ${open ? faceUp(c, j) : peekCardHTML(c, j, hand, dealAttr(j))}
+      ${pickPhase ? `<button class="pick-btn ${S.pick === j ? 'on' : ''}" data-a="pickCard" data-i="${j}" aria-pressed="${S.pick === j}" aria-label="${j + 1}-ci kartı atmaq üçün seç">${S.pick === j ? '✓ Atılır' : 'At'}</button>` : ''}
+    </div>`).join('');
+  const seenAll = open || peekedAll(hand, cards.length);
+  let badge = '';
+  if (pickPhase) {
+    const keep = S.pick != null ? me.hand.filter((_, i) => i !== S.pick) : null;
+    badge = `<div class="xal-badge ${keep && seenAll ? '' : 'dim'}">${keep ? (seenAll ? `${score3(keep)} xal` : 'Seçildi — təsdiqləyin') : 'Atılacaq kartı seçin'}</div>`;
+  } else if (me.score != null && seenAll) badge = `<div class="xal-badge">${me.score} xal</div>`;
+  const eye = finished ? '' : `<button class="eye-btn ${open ? 'on' : ''}" data-a="toggleShowHand" data-hand="${hand}" aria-pressed="${open}" aria-label="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər'}" title="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər (yalnız sizə)'}">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${open
+        ? '<path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.8M6.3 7.4A17 17 0 0 0 2 12s4 6 10 6a9.6 9.6 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'
+        : '<path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg>
+      <span>${open ? 'Ört' : 'Göstər'}</span></button>`;
+  const hint = !open && hintNeeded() ? `<div class="peek-hint" aria-live="polite"><b>Küncü sürüşdür, karta bax</b><small>Buraxanda yenə örtülür</small></div>` : '';
+  return `${hint}<div class="my-hand ${pickPhase ? 'pick' : ''} ${open ? 'open' : 'covered'}">${slots}</div>${eye}
+    ${badge}
     ${me.discarded ? `<div class="disc" title="Atdığınız kart">${cardSVG(me.discarded)}</div>` : ''}`;
+}
+
+// ---------------- son hədiyyə sətri (istinad şəklindəki kimi: "👑 Yaqub → Anar · Masa kralı") ----------------
+export function giftTickerHTML() {
+  const g = S.lastGift && S.lastGift.code === S.room?.code ? S.lastGift : null;
+  return `<div class="gift-ticker" id="giftTicker" role="status">${g
+    ? `<span class="gt-ico">${ICON[g.giftId] || '🎁'}</span><b>${esc(g.fromName)}</b> → <b>${esc(g.toName)}</b> <span class="gt-dot">·</span> <span class="gt-name">${esc(g.giftName)}</span>`
+    : '<span class="gt-ico">🎁</span><span class="muted">Hədiyyə: oyunçunun şəklinə və ya 🎁 düyməsinə toxunun</span>'}</div>`;
 }
 
 // ---------------- emoji / çat paneli ----------------
@@ -380,15 +437,23 @@ function socialHTML(room) {
   return `<div class="sbar">
       <button class="sb-btn emoji-toggle ${S.emojiOpen ? 'on' : ''}" data-a="toggleEmoji" aria-label="Emojilər">😊</button>
       <div class="emoji-inline">${emojiBtns}</div>
-      <form data-form="chat" class="chat-form" autocomplete="off">
-        <input id="chatInput" name="text" maxlength="120" placeholder="Mesaj yazın…" enterkeyhint="send" aria-label="Çat mesajı">
-        <button class="sb-send" aria-label="Göndər">➤</button>
+      <form data-form="chat" id="chatForm" class="chat-form" autocomplete="off">
+        <input id="chatInput" name="text" maxlength="120" placeholder="Mesaj yaz…" enterkeyhint="send" aria-label="Çat mesajı">
       </form>
-      <button class="sb-btn ${S.logOpen ? 'on' : ''}" data-a="toggleLog" aria-label="Çat tarixçəsi və oyun jurnalı">☰</button>
+      ${room.practice ? '' : '<button class="sb-btn gift" data-a="giftPickTarget" aria-label="Hədiyyə göndər" title="Hədiyyə göndər">🎁</button>'}
+      <button class="sb-btn send" type="submit" form="chatForm" aria-label="Mesajı göndər">➤</button>
     </div>
     ${S.emojiOpen ? `<div class="emoji-tray">${emojiBtns}</div>` : ''}
     <div class="drawer ${S.logOpen ? '' : 'hidden'}">
-      <div class="dr-head"><b>Çat</b><button class="sb-btn" data-a="toggleLog" aria-label="Bağla">✕</button></div>
+      <div class="dr-head"><b>${esc(room.name)} · ${room.members.length}/${room.settings.maxPlayers} oyunçu</b><button class="sb-btn" data-a="toggleLog" aria-label="Bağla">✕</button></div>
+      <div class="dr-toggles">
+        <button class="tgl on" data-a="openNotifications">🔔 Bildirişlər${S.unread > 0 ? ` <b>(${S.unread})</b>` : ''}</button>
+        <button class="tgl on" data-a="openProfile">👤 Profilim</button>
+        <button class="tgl ${isMuted() ? '' : 'on'}" data-a="toggleSound" aria-pressed="${!isMuted()}">${isMuted() ? '🔇' : '🔊'} Səs: <b>${isMuted() ? 'söndürülüb' : 'açıq'}</b></button>
+        <button class="tgl ${animationsOff() ? '' : 'on'}" data-a="toggleAnim" aria-pressed="${!animationsOff()}">✨ Animasiyalar: <b>${animationsOff() ? 'söndürülüb' : 'açıq'}</b></button>
+      </div>
+      ${room.practice ? '' : '<div class="muted" style="font-size:12px">🎁 Hədiyyə: oyunçunun şəklinə və ya 🎁 düyməsinə toxunun.</div>'}
+      <div class="dr-head"><b>Çat</b></div>
       <div class="log" id="chatLog">${msgs.map((m) => `<div><b>${esc(m.name)}:</b> ${esc(m.text)}</div>`).join('') || '<div class="muted">Hələ mesaj yoxdur.</div>'}</div>
       <div class="dr-head"><b>Oyun jurnalı</b></div>
       <div class="log">${log.map((l) => `<div>${esc(l.msg)}</div>`).join('')}</div>
@@ -405,20 +470,22 @@ export function renderRoom(_topbar, isFs) {
   // paylama sırası: kart alan oyunçular arasında ardıcıllıq (animasiya gecikməsi üçün)
   const dealers = seats.filter((p) => p.inHand);
   const ordOf = (id) => ({ n: Math.max(1, dealers.length), idx: Math.max(0, dealers.findIndex((p) => p.id === id)) });
-  const handHTML = myHandHTML(r, ordOf(S.user.id));
+  const handHTML = myHandHTML(r, ordOf(S.user.id), room);
   return `<div class="room n${seats.length}">
     ${roomBar(room, isFs())}
     ${room.dbWaiting ? '<div class="strip db-wait-banner">⏳ Baza bağlantısı gözlənilir — göstərilən vəziyyət son təsdiqlənmiş vəziyyətdir.</div>' : ''}
-    ${room.practice ? `<div class="strip practice">${room.demo ? '🎓 Demo' : '🤖 Məşq'} · məşq balansı — əsas balansa, borclara və statistikaya təsir etmir</div>` : ''}
+    ${room.practice ? '<div class="strip practice">🎓 Məşq rejimi · əsas balansa təsir etmir</div>' : ''}
     <div class="arena">
+      ${decorHTML()}
       <div class="tbl">
-        <div class="rim"><div class="felt"><div class="wm">SEKA</div>${centerHTML(room)}</div></div>
+        <div class="rim"><i class="brass l"></i><i class="brass r"></i><i class="brass c tl"></i><i class="brass c tr"></i><div class="felt">${FELT_MEDALLION}<div class="wm">SEKA</div>${centerHTML(room)}</div></div>
         ${seats.map((p, i) => renderSeat(p, i, seats.length, myIdx, room, ordOf(p.id))).join('')}
+        ${handHTML ? `<div class="myhand">${handHTML}</div>` : ''}
       </div>
     </div>
     <div class="side">
-      ${meZone(room, seats, handHTML)}
       <div class="ctrl">${actionsHTML(room)}</div>
+      ${room.practice ? '' : giftTickerHTML()}
       <div class="social">${socialHTML(room)}</div>
     </div>
   </div>`;

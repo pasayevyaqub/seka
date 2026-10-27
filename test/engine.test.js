@@ -327,6 +327,7 @@ test('axınlar: seka daşınan bank, cəkpot, ləğv', () => {
   r.act(3, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
   r.act(2, { type: 'offerAccept' }, 0);
+  r.act(3, { type: 'sekaSkip' }, 0);
   r.act(1, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 3 }, 0);
   r.act(2, { type: 'discard', index: 3 }, 0);
@@ -386,7 +387,7 @@ test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', 
         r.act(r.pending.a, { type: 'tieVote', choice: 'seka' }, 0);
         r.act(r.pending.b, { type: 'tieVote', choice: Math.random() < 0.7 ? 'seka' : 'bol' }, 0);
       } else if (r.phase === 'sekaJoin') {
-        for (const id of r.sekaJoin.eligible) if (!r.sekaJoin.joined.includes(id) && Math.random() < 0.5) r.act(id, { type: 'sekaJoin' }, 0);
+        for (const id of r.sekaWaiting()) r.act(id, { type: Math.random() < 0.5 ? 'sekaJoin' : 'sekaSkip' }, 0);
         const base = r.sekaJoin.base.filter((x) => !r.left.has(x));
         if (Math.random() < 0.1) r.removePlayer(base[0], 0);
         else r.act(base[0], { type: 'sekaStart' }, 0);
@@ -544,4 +545,47 @@ test('view: "put" (banka qoyulan) açıqdır, rəqib kartları isə gizli qalır
   assert.equal(cardLabel(c('VH')), 'J♥');
   assert.equal(cardLabel(c('DD')), 'Q♦');
   assert.equal(cardLabel(c('10C')), '10♣');
+});
+
+// ---------------- v2.7: sekaya qoşulma — 60 saniyə, erkən başlatma qadağası ----------------
+test('seka: 60 san qoşulma vaxtı; hüququ olan qərar verməyibsə erkən başlatmaq olmur; vaxt bitəndə qoşulanlarla davam', () => {
+  assert.equal(TIMING.SEKA_JOIN_MS, 60_000);
+  assert.notEqual(TIMING.SEKA_JOIN_MS, TIMING.DISCARD_MS);
+  const r = mk(4, {
+    1: { 1: '7S 8C 9D', 2: 'TC KC 7D', 3: '6H 7H 9S', 4: '6C 7S 8H' },
+    2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C', 3: '6S 7D 8D 9H' },
+  });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'xod', amount: 10 }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  r.act(4, { type: 'pas' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 1000);
+  assert.equal(r.phase, 'sekaJoin');
+  assert.equal(r.sekaJoin.deadline, 1000 + 60_000);
+  assert.deepEqual(r.viewFor(1, 1000).sekaJoin.waiting, [3, 4]);
+  assert.throws(() => r.act(1, { type: 'sekaStart' }, 2000), /Qoşulma vaxtı bitməyib/);
+  const b3 = r.players.get(3).balance; const b4 = r.players.get(4).balance;
+  r.act(3, { type: 'sekaJoin' }, 3000);
+  assert.throws(() => r.act(3, { type: 'sekaJoin' }, 3000), /Artıq qoşulmusunuz/); // təkrar sorğu ikiqat çıxmır
+  assert.equal(r.players.get(3).balance, b3 - 20);
+  assert.throws(() => r.act(2, { type: 'sekaStart' }, 4000), /P4/);
+  assert.equal(r.tick(1000 + 59_999), false);
+  assert.equal(r.tick(1000 + 60_000), true);   // vaxt bitdi → qoşulanlarla davam
+  assert.equal(r.phase, 'discard');
+  assert.deepEqual(r.active().sort(), [1, 2, 3]);
+  assert.equal(r.players.get(4).balance, b4);  // qoşulmayandan xal tutulmadı
+});
+
+test('seka: hamı qərar verəndə (qoşulmuram daxil) erkən başlatmaq olur', () => {
+  const r = mk(3, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D', 3: '6H 7H 9S' }, 2: { 1: 'TS KS DS 6H', 2: '7H 8C 9D 6C' } });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'xod', amount: 10 }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(3, { type: 'sekaSkip' }, 0);
+  assert.throws(() => r.act(3, { type: 'sekaJoin' }, 0), /bildirmisiniz/);
+  r.act(2, { type: 'sekaStart' }, 0);
+  assert.equal(r.phase, 'discard');
 });

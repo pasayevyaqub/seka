@@ -134,6 +134,8 @@ export class RoomManager {
     return room;
   }
 
+  roomOfOrNull(userId) { return this.rooms.get(this.userRoom.get(userId)) || null; }
+
   roundRunning(room) { return !!(room.round && room.round.phase !== 'finished'); }
   // Bazaya hələ yazılmamış (təsdiqlənməmiş) paket varsa otaq dondurulub
   isBlocked(room) { return room.outbox.length > 0; }
@@ -243,7 +245,7 @@ export class RoomManager {
     if (botCount) room.settings.maxPlayers = Math.max(room.settings.maxPlayers, Math.min(8, botCount + 1));
     this.seat(room, user);
     for (let i = 0; i < botCount; i++) this.addBotTo(room);
-    this.say(room, demo ? `Demo: hər girişdə ${PRACTICE_START} virtual demo oyun xalı. Əsas balans, borclar və statistika dəyişmir.` : `"${room.name}" otağı yaradıldı.`);
+    this.say(room, demo ? `Demo: hər girişdə ${PRACTICE_START} demo xal. Əsas balans, borclar və statistika dəyişmir.` : `"${room.name}" otağı yaradıldı.`);
     this.broadcast(room);
     return room.code;
   }
@@ -384,6 +386,12 @@ export class RoomManager {
   }
 
   // yalnız otaq üzvlərinə; masa vəziyyətini yenidən göndərmir (formalar sıfırlanmır)
+  /** Masa hədiyyəsi animasiyası — YALNIZ bazada uğurla yazılmış əməliyyatdan sonra, otaqdakı insanlara bir dəfə göndərilir.
+   *  Yaddaşda saxlanılmır: yenidən qoşulan klient köhnə animasiyaları almır. */
+  giftEvent(room, ev) {
+    for (const id of room.members.keys()) if (id > 0) this.send(id, { t: 'tgift', ...ev, at: Date.now() });
+  }
+
   bubble(room, b) {
     for (const id of room.members.keys()) if (id > 0) this.send(id, { t: 'bubble', ...b, at: Date.now() });
   }
@@ -462,13 +470,15 @@ export class RoomManager {
     if (players.length < 2) throw new GameError('Ən azı 2 oyunçu lazımdır.');
     if (!practice) {
       const can = players.filter((p) => p.balance >= room.settings.ante);
-      if (can.length < 2) throw new GameError(`Raund üçün balansı oyun haqqına (${room.settings.ante} oyun xalı) çatan ən azı 2 oyunçu lazımdır. Balansı çatmayan oyunçu "Kredit istə" və ya Demo seçə bilər.`);
+      if (can.length < 2) throw new GameError(`Raund üçün balansı oyun haqqına (${room.settings.ante} xal) çatan ən azı 2 oyunçu lazımdır. Balansı çatmayan oyunçu "Kredit istə" və ya Demo seçə bilər.`);
     }
     const k = room.dealerIdx % players.length;
     const ordered = [...players.slice(k), ...players.slice(0, k)];
     room.dealerIdx++;
     room.round = new Round({ players: ordered, settings: room.settings, now: Date.now(), uid: practice ? null : crypto.randomUUID() });
     room.round.practice = practice;
+    // "Borca oyna" yalnız real otaqda: bot yoxdur, demo deyil (iki aktiv insan şərtini mühərrik yoxlayır)
+    room.round.allowCredit = !practice;
     room.round.botMem = new Map();
     room.roundEndQueued = false;
     room.batchSeq = 0;
@@ -521,7 +531,12 @@ export class RoomManager {
       room: room.code,
       effects,
       contrib: { ...r.contrib },
-      end: ended ? { status: r.result.how === 'aborted' ? 'aborted' : 'finished', flows: r.result.flows } : null,
+      end: ended ? {
+        status: r.result.how === 'aborted' ? 'aborted' : 'finished',
+        flows: r.result.flows,
+        // borca oyundan yaranan borclar raundun son paketi ilə EYNİ tranzaksiyada yazılır
+        loans: (r.result.creditLoans || []).map((l) => ({ ...l, note: `Borca oyun — otaq ${room.code} / raund ${String(r.uid).slice(0, 8)}` })),
+      } : null,
     });
   }
 
@@ -534,6 +549,12 @@ export class RoomManager {
         try {
           const res = await this.store.applyRoundBatch(b);
           room.outbox.shift();
+          if (!res.duplicate) {
+            for (const l of b.end?.loans || []) {
+              this.send(l.borrower, { t: 'notify', kind: 'loan', text: `${l.note}: borcunuz ${l.amount} xal.` });
+              this.send(l.lender, { t: 'notify', kind: 'loan', text: `${l.note}: alacağınız ${l.amount} xal.` });
+            }
+          }
           for (const [id, bal] of Object.entries(res.balances || {})) {
             const m = room.members.get(Number(id));
             if (m) m.balance = bal;
