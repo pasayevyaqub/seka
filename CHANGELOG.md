@@ -1,5 +1,19 @@
 # Dəyişikliklər
 
+## v2.8.0 — xal/balans məxfiliyi, masadan borc, mobil masa, çat tarixçəsi, sekadan keçən bank, onlayn status, "Şir", donmaya qarşı
+
+- **Kart xalı yalnız baxandan sonra:** yeni `look` hərəkəti (versiyanı dəyişmir, başqalarına heç nə göndərmir); server `me.score`-u yalnız baxandan sonra (və raund bitəndə) göndərir. Botlar avtomatik "baxır".
+- **Balans məxfiliyi:** otaq üzvlərinin və raund oyunçularının balansı yalnız özünə göndərilir; "Borca oyna" təklifinin "çatışmayan məbləği" yalnız iki tərəfə; hədiyyə alıcısı seçimində balans göstərilmir. Rəqib üçün bankdakı payı göstərilir.
+- **Masadan borc:** oyunçu menyusu (Hədiyyə / Borc istə / Borc təklif et), masada gözləyən təkliflər zolağı və pəncərəsi, `GET /api/loans/pending`. Mövcud atomik + idempotent + otaq növbəsi ilə ardıcıl axın istifadə olunur.
+- **Mobil masa:** oturacaqlar ellips boyunca faizlə; rəqibin kartları avatarın içəri tərəfində (sıx masada küncdə kiçik yelpazə); status/taymer/onlayn nişanları avatarın üzərində; xal nişanı və "Göstər" kartların yanında; kiçik ekran və landşaft üçün ayrıca ölçülər; toxunma sahələri böyüdüldü. `tools/ui-layout.cjs` ilə 91 kombinasiya yoxlanılıb.
+- **Çat tarixçəsi:** 💬 açılan panel, oxunmamış sayı, qoşulandan sonrakı son 100 mesaj, yalnız otaq üzvlərinə.
+- **Sekadan keçən bank:** qayda sənədləşdirilib (README 5d) və UI-da göstərilir (`sekaJoin.carried`, `carry`); uçot testləri (seka, ikinci seka, bölmə, cəkpot, çıxma, ləğv, borca oyna).
+- **Onlayn status:** yaşıl/qırmızı nöqtə; botlarda yoxdur; bağlantı bərpasında yenilənir.
+- **Səs:** "Səsi yoxla". Mikrofon (WebRTC) əlavə edilməyib — səbəb və TURN xərci README 9c-də.
+- **"Şir" hədiyyəsi:** Migration 7 (`gift_types.share_pct`, `lion`), hədiyyə üzrə ayrıca faiz; istifadəçinin şəkli əsasında animasiya (portaldan tullanma, yal hərəkəti, nərilti, qızılı işıqlar, ~3,2 san), sintez səs, yüngül rejim, SVG ehtiyat variantı.
+- **Donma/bağlantı:** PG vaxt limitləri və pool `error` dinləyicisi, taymer növbəsinin şişməsinin qarşısı, uzun növbə işlərinin loqu, ping bazasız, sürət limiti cədvəlinin təmizlənməsi, ping 15 san, klient ürək döyüntüsü + "yenidən qoşulur" zolağı, `/health` (baza yoxlaması ilə).
+- **Testlər:** `test/v28-engine.test.js`, `test/v28-integration.test.js`; köhnə testlər yeni qaydalara uyğunlaşdırıldı.
+
 ## v2.7.1 — Admin paneli: canlı yenilənmədə formalar qorunur
 
 - **Problem:** `refreshAdminList()` siyahını `innerHTML` ilə yenidən yaradırdı. Canlı "staff" bildirişi (məs. yeni kredit müraciəti) gələndə "Oyunçu əlavə et" və kredit qərarı formalarına yazılan mətn silinir, fokus itirdi.

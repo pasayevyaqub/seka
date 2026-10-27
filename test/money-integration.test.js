@@ -362,7 +362,7 @@ test('masa hədiyyəsi: demo/botlu otaqda və otaqdan kənarda işləmir; admin 
   A.close();
   // kataloq: hamıya; ayarlar: yalnız admin
   const cat = await http('/api/table-gifts', { cookie: await login('tgd_a') });
-  assert.equal(cat.data.sharePct, 30); assert.equal(cat.data.gifts.length, 3);
+  assert.equal(cat.data.sharePct, 30); assert.equal(cat.data.gifts.length, 4); assert.ok(cat.data.gifts.some((g) => g.id === 'lion' && g.sharePct === 30));
   const plain = await http('/api/admin/table-gifts', { cookie: await login('tgd_a') });
   assert.equal(plain.status, 403);
   const adm = (await http('/api/login', { body: { username: 'admin', password: 'admin123' } })).cookie;
@@ -372,7 +372,7 @@ test('masa hədiyyəsi: demo/botlu otaqda və otaqdan kənarda işləmir; admin 
   assert.equal(set.status, 200, JSON.stringify(set.data));
   assert.equal(set.data.sharePct, 40);
   const cat2 = await http('/api/table-gifts', { cookie: await login('tgd_a') });
-  assert.deepEqual(cat2.data.gifts.map((x) => x.id), ['table_king', 'fire_ace']); // deaktiv hədiyyə kataloqda görünmür
+  assert.deepEqual(cat2.data.gifts.map((x) => x.id), ['table_king', 'fire_ace', 'lion']); // deaktiv hədiyyə kataloqda görünmür
   const bad = await http('/api/admin/table-gifts/settings', { body: { sharePct: 150 }, cookie: adm });
   assert.equal(bad.status, 400);
   await http('/api/admin/table-gifts/settings', { body: { sharePct: 30, gifts: [{ id: 'card_rain', price: 100, active: true }] }, cookie: adm });

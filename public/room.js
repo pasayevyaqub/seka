@@ -22,6 +22,7 @@ function seatList(room) {
   if (r) {
     for (const p of r.players) {
       const m = byId.get(p.id);
+      // balans: server başqalarınınkını göndərmir (null); öz balansım otaq üzvlüyündən
       list.push({ ...p, isBot: m?.isBot ?? p.id < 0, connected: m ? m.connected : false, inRoom: !!m, balance: m ? m.balance : p.balance, avatarVer: m?.avatarVer || 0 });
     }
     for (const m of room.members) if (!r.players.some((p) => p.id === m.id)) list.push({ ...m, inHand: false, status: 'wait', inRoom: true, put: 0 });
@@ -55,19 +56,24 @@ export function bubbleHTML(userId) {
 export function showBubble(msg) {
   S.bubbles.set(msg.userId, { kind: msg.kind, value: msg.value, at: Date.now() });
   if (msg.kind === 'text' && S.room) {
-    S.room.chatMsgs = [...(S.room.chatMsgs || []), { userId: msg.userId, name: msg.name, text: msg.value }].slice(-30);
+    S.room.chatMsgs = [...(S.room.chatMsgs || []), { userId: msg.userId, name: msg.name, text: msg.value, t: msg.ts || msg.at }].slice(-100);
+    updateChatBadge();
   }
   // masanı yenidən çəkmirik (formalar, seçimlər, yazılan mətn sıfırlanmasın) — yalnız balonu yerinə qoyuruq
   const holder = document.querySelector(`[data-seat="${msg.userId}"] .bubble-slot`);
   if (holder) holder.innerHTML = bubbleHTML(msg.userId);
   if (msg.kind === 'text') {
-    const log = document.getElementById('chatLog');
-    if (log) {
+    // açıq çat pəncərəsinə mesaj yerində əlavə olunur (masa yenidən çəkilmir, yazı sahəsinin fokusu pozulmur)
+    for (const log of document.querySelectorAll('.chat-log')) {
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
       log.querySelector('.muted')?.remove();
       const d = document.createElement('div');
-      d.innerHTML = `<b>${esc(msg.name || '')}:</b> ${esc(msg.value)}`;
-      log.appendChild(d); log.scrollTop = log.scrollHeight;
+      d.className = 'cm' + (msg.userId === S.user?.id ? ' mine' : '');
+      d.innerHTML = chatLineHTML({ userId: msg.userId, name: msg.name, text: msg.value, t: msg.ts || msg.at });
+      log.appendChild(d);
+      if (atBottom) log.scrollTop = log.scrollHeight;
     }
+    if (S.chatOpen) markChatSeen();
   }
   setTimeout(() => {
     const cur = S.bubbles.get(msg.userId);
@@ -77,6 +83,28 @@ export function showBubble(msg) {
       if (h) h.innerHTML = '';
     }
   }, BUBBLE_MS);
+}
+
+// ---------------- çat tarixçəsi ----------------
+const hhmm = (t) => { try { return new Date(t).toLocaleTimeString('az-AZ', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Baku' }); } catch { return ''; } };
+export function chatLineHTML(m) {
+  return `<span class="cm-t">${hhmm(m.t)}</span> <b>${esc(m.name || '?')}:</b> ${esc(m.text)}`;
+}
+// oxunmamış: çat bağlı ikən gələn başqalarının mesajları (bu cihazda saxlanılır, serverə getmir)
+export function unreadChat() {
+  const msgs = S.room?.chatMsgs || [];
+  const seen = S.chatSeen?.[S.room?.code] || 0;
+  return msgs.filter((m) => m.userId !== S.user?.id && (m.t || 0) > seen).length;
+}
+export function markChatSeen() {
+  const msgs = S.room?.chatMsgs || [];
+  const last = msgs.length ? Math.max(...msgs.map((m) => m.t || 0)) : Date.now();
+  S.chatSeen = { ...(S.chatSeen || {}), [S.room?.code]: last };
+  updateChatBadge();
+}
+export function updateChatBadge() {
+  const n = S.chatOpen ? 0 : unreadChat();
+  for (const el of document.querySelectorAll('.chat-count')) { el.textContent = n > 9 ? '9+' : String(n); el.classList.toggle('hidden', !n); }
 }
 
 // ---------------- üst panel ----------------
@@ -125,26 +153,30 @@ function seatTimer(p, r, room) {
 
 const tagSvg = (svg, attr) => svg.replace('<svg ', `<svg ${attr} `);
 
-// Oturacaqlar masanın içində, kənara yaxın. Mənim yerim aşağıda ortadadır, kartlarım masanın aşağı kənarının üstündə.
-// İstinad şəklindəki kimi: oturacaqlar masanın içində, kənarlara yaxın. Sıra saat əqrəbi istiqamətində:
-// mən (aşağı orta) → sol aşağı → sol yuxarı → yuxarı → sağ yuxarı → sağ aşağı.
-const LAYOUT = {
-  2: [[50, 7]],
-  3: [[19, 28], [81, 28]],
-  4: [[18, 42], [50, 6], [82, 42]],
-  5: [[18, 47], [18, 19], [82, 19], [82, 47]],
-  6: [[18, 47], [18, 19], [50, 6], [82, 19], [82, 47]],
-  7: [[16, 54], [16, 29], [33, 7], [67, 7], [84, 29], [84, 54]],
-  8: [[15, 57], [15, 34], [27, 11], [50, 3], [73, 11], [85, 34], [85, 57]],
-};
+// v2.8: oturacaqlar ellips boyunca (portret və landşaftda eyni qayda, faizlə — istənilən ekran ölçüsünə uyğunlaşır).
+// Mən sol aşağıda (kartlarımın solunda), rəqiblər masanın yuxarı qövsü boyunca saat əqrəbi istiqamətində:
+// mən → sol → yuxarı → sağ. Aşağı orta hissə öz kartlarım üçün boş saxlanılır.
+// side: rəqibin kartları avatarın masanın mərkəzinə baxan tərəfinə qoyulur (l = sağa, r = sola).
 function seatPos(i, n, myIdx) {
   const rel = (i - myIdx + n) % n;
-  // geniş (üfüqi) masa üçün ayrıca yerlər: ellips boyunca; mən aşağı solda (kartlarımın yanında)
-  const ang = ((90 + (rel * 360) / n) * Math.PI) / 180;
-  const wide = rel === 0 ? { wx: 11, wy: 85 } : { wx: 50 + 38 * Math.cos(ang) - 6, wy: 47 + 37 * Math.sin(ang) };
-  if (rel === 0) return { x: 50, y: 64, ...wide };
-  const [x, y] = (LAYOUT[n] || LAYOUT[8])[rel - 1] || [50, 7];
-  return { x, y, ...wide };
+  // portret (x, y) və geniş/landşaft masa (wx, wy) üçün ayrıca nöqtələr; CSS konteyner sorğusu birini seçir
+  if (rel === 0) return { x: 9, y: 72, wx: 8, wy: 84, side: 'me', top: false };
+  const k = n - 1;
+  let deg;
+  if (k === 1) deg = 270;
+  else if (k === 2) deg = [212, 328][rel - 1];
+  else deg = 178 + (184 * (rel - 1)) / (k - 1);
+  const a = (deg * Math.PI) / 180;
+  const x = 50 + 41 * Math.cos(a);
+  const y = 47 + 37 * Math.sin(a);
+  // geniş masa: mən sol aşağı küncdə olduğum üçün qövs bir az yuxarıdan başlayır
+  const wdeg = k === 1 ? 270 : (k === 2 ? [205, 335][rel - 1] : 166 + (208 * (rel - 1)) / (k - 1));
+  const wa = (wdeg * Math.PI) / 180;
+  const wx = 50 + 43 * Math.cos(wa);
+  const wy = 45 + 37 * Math.sin(wa);
+  const side = x > 52 ? 'r' : 'l';
+  // portretdə yuxarı sıradakı oturacaqların kartları adın ALTINA (masanın ortasına doğru) düşür — yan qonşuya dəymir
+  return { x, y, wx, wy, side, top: y < 26 };
 }
 
 function renderSeat(p, i, n, myIdx, room, ord) {
@@ -160,21 +192,26 @@ function renderSeat(p, i, n, myIdx, room, ord) {
     else cards = Array.from({ length: p.cardCount }, (_, j) => tagSvg(cardBackSVG(), `data-deal="${j * ord.n + ord.idx}"`)).join('');
   }
   const giftable = !room.practice && !isMe && !p.isBot && p.id > 0 && p.inRoom;
-  return `<div class="seat ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''} ${out ? 'out' : ''} ${won ? 'won' : ''} ${p.connected ? '' : 'offline'}"
+  // onlayn: yalnız insanlar üçün (bot üçün BOT nişanı kifayətdir). Otaqdan çıxan və ya bağlantısı kəsilən — qırmızı.
+  const online = !p.isBot && p.inRoom && p.connected === true;
+  const dot = p.isBot ? '' : `<span class="ol-dot ${online ? 'on' : 'off'}" role="img" aria-label="${online ? 'onlayn' : 'oflayn'}" title="${online ? 'Onlayn' : (p.inRoom ? 'Bağlantı kəsilib' : 'Masadan çıxıb')}"></span>`;
+  // balans məxfidir: rəqib üçün yalnız bu raundda banka qoyduğu (risk məlumatı); öz balansım üst paneldədir
+  const put = !isMe && r && p.inHand && p.put ? `<span class="put" title="Bu raundda banka qoyduğu">🪙${fmt(p.put).replace(' xal', '')}</span>` : '';
+  const extra = (p.score != null && !isMe ? `<span class="sc-score">${p.score} xal</span>` : '')
+    + (p.creditPut ? `<span class="credit-chip" title="Borca (şərti) qoyuluş">🧾 ${fmt(p.creditPut)}</span>` : '');
+  return `<div class="seat s-${pos.side} ${pos.top ? 'pt' : ''} ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''} ${out ? 'out' : ''} ${won ? 'won' : ''} ${online || p.isBot ? '' : 'offline'}"
       style="--x:${pos.x.toFixed(2)}%;--y:${pos.y.toFixed(2)}%;--wx:${pos.wx.toFixed(2)}%;--wy:${pos.wy.toFixed(2)}%" data-seat="${p.id}">
-    <div class="av" ${giftable ? `data-a="giftModal" data-id="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)} — hədiyyə göndər" title="Hədiyyə göndər"` : ''}>
+    <div class="av" ${giftable ? `data-a="playerMenu" data-id="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)} — hədiyyə, borc istə, borc təklif et" title="Hədiyyə / borc"` : ''}>
       ${seatTimer(p, r, room)}
       ${avatarHTML(p, 'seat-av')}
       ${room.hostId === p.id ? '<span class="host" title="Otaq sahibi">👑</span>' : ''}
       ${p.isBot ? '<span class="botmark" title="Bot">BOT</span>' : ''}
+      ${dot}
+      ${statusTag(p, r)}
       <div class="bubble-slot">${bubbleHTML(p.id)}</div>
     </div>
-    <div class="nm-pill">${esc(p.name)}</div>
-    <div class="bal-pill ${p.balance < 0 ? 'neg' : ''}">${fmt(p.balance)}</div>
-    ${statusTag(p, r)}
-    ${cards ? `<div class="sc-row">${cards}</div>` : ''}
-    ${p.score != null && !isMe ? `<span class="sc-score">${p.score} xal</span>` : ''}
-    ${p.creditPut ? `<span class="credit-chip" title="Borca (şərti) qoyuluş">🧾 borca ${fmt(p.creditPut)}</span>` : ''}
+    <div class="nm-pill">${esc(p.name)}${put}</div>
+    ${cards || extra ? `<div class="sc-wrap">${cards ? `<div class="sc-row">${cards}</div>` : ''}${extra}</div>` : ''}
   </div>`;
 }
 
@@ -198,7 +235,7 @@ function centerHTML(room) {
   }
   return `<div class="ctr">
     ${r.isSeka || r.phase === 'sekaJoin' ? '<div class="seka-badge">SEKA</div>' : ''}
-    <div class="bankbox"><small>BANK</small><b>${fmt(r.pot)}</b>${r.creditPot ? `<span class="credit-pot" title="Borca (şərti) qoyuluş — real xal deyil, raund sonunda ayrıca hesablanır">🧾 +${fmt(r.creditPot)} borca</span>` : ''}${r.phase === 'betting' ? `<i>Cari xod: ${fmt(Math.max(r.currentBet, r.minXod))}</i>` : ''}</div>
+    <div class="bankbox"><small>BANK${r.carry && r.isSeka ? ` · sekadan ${fmt(r.carry.pot)}` : ''}</small><b>${fmt(r.pot)}</b>${r.creditPot ? `<span class="credit-pot" title="Borca (şərti) qoyuluş — real xal deyil, raund sonunda ayrıca hesablanır">🧾 +${fmt(r.creditPot)} borca</span>` : ''}${r.phase === 'betting' ? `<i>Cari xod: ${fmt(Math.max(r.currentBet, r.minXod))}</i>` : ''}</div>
     <div class="pot-row">
       <div class="deck" id="deckAnchor">${cardBackSVG()}${cardBackSVG()}</div>
       <div class="pot-notes" id="potAnchor">${potStackHTML(r.pot)}</div>
@@ -317,7 +354,7 @@ function actionsHTML(room) {
     }
     if (me?.status === 'attached') return `<div class="notice">Şəriksiniz: <b>${nameOf(me.attachedTo)}</b> qalib gəlsə bank bölünəcək.</div>`;
     if (me) return `<div class="notice">${me.status === 'folded' ? 'Pas dediniz.' : 'Bu raunddan çıxdınız.'} Növbə: <b>${nameOf(r.turn)}</b></div>`;
-    return `<div class="notice">Raund gedir. Növbəti raundu gözləyin.</div>`;
+    return `<div class="notice">Raund gedir — siz növbəti yeni raunddan oynayacaqsınız (cari bankdan pay düşmür).</div>`;
   }
 
   if (r.phase === 'creditOffer') {
@@ -370,7 +407,8 @@ function actionsHTML(room) {
     const waiting = sjn.waiting || [];
     const canDecide = sjn.eligible.includes(uid) && !sjn.joined.includes(uid) && !(sjn.skipped || []).includes(uid);
     let html = `<div class="seka-join">
-      <div class="sj-head"><b>SEKA!</b> Bank növbəti əlinə keçir. Qoşulmaq: <b>${fmt(sjn.cost)}</b></div>
+      <div class="sj-head"><b>SEKA!</b> Bank (<b>${fmt(sjn.carried ?? r.pot)}</b>) bölünmür — tam həcmi ilə seka əlinə keçir.</div>
+      <div class="sj-rule">${sjn.base.map(nameOf).join(' və ')} əlavə ödəmir. Bu raundda iştirak edib pas deyən oyunçu <b>${fmt(sjn.cost)}</b> (2 × oyun haqqı) qoyub qoşula bilər. Raund gedərkən otağa gələn oyunçu bu sekaya qoşulmur — növbəti yeni raunddan oynayır.</div>
       <div class="sj-timer">Qalan vaxt: <b data-secs="${sjn.deadline}" data-unit=" san"></b></div>
       <div class="sj-meta">Qoşulanlar: ${joined}${waiting.length ? ` · Gözlənilir: ${waiting.map(nameOf).join(', ')}` : ''}</div></div>`;
     if (canDecide) html += `<div class="big2"><button class="bb xod" data-a="sekaJoin">Sekaya qoşul (${fmt(sjn.cost)})</button><button class="bb pas" data-a="sekaSkip">Qoşulmuram</button></div>`;
@@ -404,21 +442,33 @@ function myHandHTML(r, ord, room) {
       ${open ? faceUp(c, j) : peekCardHTML(c, j, hand, dealAttr(j))}
       ${pickPhase ? `<button class="pick-btn ${S.pick === j ? 'on' : ''}" data-a="pickCard" data-i="${j}" aria-pressed="${S.pick === j}" aria-label="${j + 1}-ci kartı atmaq üçün seç">${S.pick === j ? '✓ Atılır' : 'At'}</button>` : ''}
     </div>`).join('');
+  // Xal yalnız kartlara baxandan sonra: bütün kartlara küncdən baxanda və ya "Göstər" basılanda serverə "look" gedir,
+  // server isə xalı yalnız bundan sonra göndərir (me.score). Raund bitəndə xal hamıya aid qaydaya görə açılır.
   const seenAll = open || peekedAll(hand, cards.length);
+  S.lookWanted = !finished && seenAll && !me.looked ? `${room.code}:${r.handNo}` : null;
   let badge = '';
   if (pickPhase) {
     const keep = S.pick != null ? me.hand.filter((_, i) => i !== S.pick) : null;
     badge = `<div class="xal-badge ${keep && seenAll ? '' : 'dim'}">${keep ? (seenAll ? `${score3(keep)} xal` : 'Seçildi — təsdiqləyin') : 'Atılacaq kartı seçin'}</div>`;
-  } else if (me.score != null && seenAll) badge = `<div class="xal-badge">${me.score} xal</div>`;
+  } else if (me.score != null && (seenAll || finished || me.looked)) badge = `<div class="xal-badge">${me.score} xal</div>`;
+  else if (!finished) badge = `<div class="xal-badge dim hidden-score" aria-label="Xal gizlidir — kartlara baxın">? xal</div>`;
   const eye = finished ? '' : `<button class="eye-btn ${open ? 'on' : ''}" data-a="toggleShowHand" data-hand="${hand}" aria-pressed="${open}" aria-label="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər'}" title="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər (yalnız sizə)'}">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${open
         ? '<path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.8M6.3 7.4A17 17 0 0 0 2 12s4 6 10 6a9.6 9.6 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'
         : '<path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'}</svg>
       <span>${open ? 'Ört' : 'Göstər'}</span></button>`;
   const hint = !open && hintNeeded() ? `<div class="peek-hint" aria-live="polite"><b>Küncü sürüşdür, karta bax</b><small>Buraxanda yenə örtülür</small></div>` : '';
-  return `${hint}<div class="my-hand ${pickPhase ? 'pick' : ''} ${open ? 'open' : 'covered'}">${slots}</div>${eye}
-    ${badge}
+  return `${hint}<div class="my-hand ${pickPhase ? 'pick' : ''} ${open ? 'open' : 'covered'}">${slots}</div>
+    <div class="hand-side">${eye}${badge}</div>
     ${me.discarded ? `<div class="disc" title="Atdığınız kart">${cardSVG(me.discarded)}</div>` : ''}`;
+}
+
+// ---------------- masada borc təklifləri (mənim cavabımı gözləyən) ----------------
+function loanStripHTML(room) {
+  if (room.practice) return '';
+  const n = (S.pendingLoans || []).filter((l) => l.mine).length;
+  if (!n) return '';
+  return `<button class="loan-strip" data-a="loansModal">🤝 <b>${n}</b> borc ${n === 1 ? 'təklifi/istəyi' : 'təklifi/istəyi'} cavabınızı gözləyir — bax</button>`;
 }
 
 // ---------------- son hədiyyə sətri (istinad şəklindəki kimi: "👑 Yaqub → Anar · Masa kralı") ----------------
@@ -430,11 +480,17 @@ export function giftTickerHTML() {
 }
 
 // ---------------- emoji / çat paneli ----------------
+function chatListHTML(msgs) {
+  return msgs.map((m) => `<div class="cm ${m.userId === S.user.id ? 'mine' : ''}">${chatLineHTML(m)}</div>`).join('') || '<div class="muted">Hələ mesaj yoxdur. Otağa qoşulduğunuzdan sonrakı mesajlar burada qalır.</div>';
+}
+
 function socialHTML(room) {
-  const msgs = (room.chatMsgs || []).slice(-30);
+  const msgs = room.chatMsgs || [];
+  const unread = S.chatOpen ? 0 : unreadChat();
   const log = (room.round ? room.round.log : room.chat) || [];
   const emojiBtns = EMOJIS.map((e) => `<button class="emoji-btn" data-a="emoji" data-e="${e}" aria-label="emoji ${e}">${e}</button>`).join('');
   return `<div class="sbar">
+      <button class="sb-btn chat-toggle ${S.chatOpen ? 'on' : ''}" data-a="toggleChat" aria-pressed="${!!S.chatOpen}" aria-label="Çat tarixçəsi${unread ? `, ${unread} yeni mesaj` : ''}" title="Çat tarixçəsi">💬<span class="chat-count ${unread ? '' : 'hidden'}">${unread > 9 ? '9+' : unread}</span></button>
       <button class="sb-btn emoji-toggle ${S.emojiOpen ? 'on' : ''}" data-a="toggleEmoji" aria-label="Emojilər">😊</button>
       <div class="emoji-inline">${emojiBtns}</div>
       <form data-form="chat" id="chatForm" class="chat-form" autocomplete="off">
@@ -444,6 +500,9 @@ function socialHTML(room) {
       <button class="sb-btn send" type="submit" form="chatForm" aria-label="Mesajı göndər">➤</button>
     </div>
     ${S.emojiOpen ? `<div class="emoji-tray">${emojiBtns}</div>` : ''}
+    ${S.chatOpen ? `<div class="chat-panel" role="log" aria-label="Çat tarixçəsi">
+      <div class="cp-head"><b>💬 Çat</b><span class="muted">${msgs.length} mesaj · yalnız bu otağın üzvləri görür</span><button class="sb-btn" data-a="toggleChat" aria-label="Çatı bağla">✕</button></div>
+      <div class="log chat-log">${chatListHTML(msgs)}</div></div>` : ''}
     <div class="drawer ${S.logOpen ? '' : 'hidden'}">
       <div class="dr-head"><b>${esc(room.name)} · ${room.members.length}/${room.settings.maxPlayers} oyunçu</b><button class="sb-btn" data-a="toggleLog" aria-label="Bağla">✕</button></div>
       <div class="dr-toggles">
@@ -451,10 +510,11 @@ function socialHTML(room) {
         <button class="tgl on" data-a="openProfile">👤 Profilim</button>
         <button class="tgl ${isMuted() ? '' : 'on'}" data-a="toggleSound" aria-pressed="${!isMuted()}">${isMuted() ? '🔇' : '🔊'} Səs: <b>${isMuted() ? 'söndürülüb' : 'açıq'}</b></button>
         <button class="tgl ${animationsOff() ? '' : 'on'}" data-a="toggleAnim" aria-pressed="${!animationsOff()}">✨ Animasiyalar: <b>${animationsOff() ? 'söndürülüb' : 'açıq'}</b></button>
+        <button class="tgl" data-a="soundTest">🔈 Səsi yoxla</button>
       </div>
       ${room.practice ? '' : '<div class="muted" style="font-size:12px">🎁 Hədiyyə: oyunçunun şəklinə və ya 🎁 düyməsinə toxunun.</div>'}
       <div class="dr-head"><b>Çat</b></div>
-      <div class="log" id="chatLog">${msgs.map((m) => `<div><b>${esc(m.name)}:</b> ${esc(m.text)}</div>`).join('') || '<div class="muted">Hələ mesaj yoxdur.</div>'}</div>
+      <div class="log chat-log">${chatListHTML(msgs)}</div>
       <div class="dr-head"><b>Oyun jurnalı</b></div>
       <div class="log">${log.map((l) => `<div>${esc(l.msg)}</div>`).join('')}</div>
     </div>`;
@@ -474,6 +534,7 @@ export function renderRoom(_topbar, isFs) {
   return `<div class="room n${seats.length}">
     ${roomBar(room, isFs())}
     ${room.dbWaiting ? '<div class="strip db-wait-banner">⏳ Baza bağlantısı gözlənilir — göstərilən vəziyyət son təsdiqlənmiş vəziyyətdir.</div>' : ''}
+    ${S.conn && S.conn !== 'online' ? `<div class="strip conn-banner" role="status">📡 Serverlə əlaqə kəsildi — <b>yenidən qoşulur…</b> Gördüyünüz vəziyyət yenilənməyib.</div>` : ''}
     ${room.practice ? '<div class="strip practice">🎓 Məşq rejimi · əsas balansa təsir etmir</div>' : ''}
     <div class="arena">
       ${decorHTML()}
@@ -484,6 +545,7 @@ export function renderRoom(_topbar, isFs) {
       </div>
     </div>
     <div class="side">
+      ${loanStripHTML(room)}
       <div class="ctrl">${actionsHTML(room)}</div>
       ${room.practice ? '' : giftTickerHTML()}
       <div class="social">${socialHTML(room)}</div>

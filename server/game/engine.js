@@ -218,6 +218,9 @@ export class Round {
         cards: isSeka ? null : hands[id], // oynanılan 3 kart
         discarded: null,
         status: 'active', acted: false, attachedTo: null, seen: new Set(),
+        // "baxıb": oyunçu kartlarına baxıb (küncdən baxma və ya "Göstər"). Xal nişanı yalnız bundan sonra göndərilir.
+        // Botlar avtomatik "baxır". Yeni əl (seka) yeni kartlar deməkdir — sıfırlanır.
+        looked: id < 0,
       };
     }
     this.currentBet = 0;
@@ -477,8 +480,12 @@ export class Round {
     this.phase = 'sekaJoin';
     this.pending = null;
     this.turn = null;
-    this.sekaJoin = { base: [a, b], eligible, joined: [], skipped: [], cost: this.settings.ante * 2, deadline: now + TIMING.SEKA_JOIN_MS };
-    this.say(`SEKA! Bank (${this.pot} xal) növbəti raunda keçir. Qoşulmaq üçün: ${this.sekaJoin.cost} xal.`);
+    // QAYDA (README 5d): bank bölünmür, TAM HƏCMİ ilə seka əlinə keçir (yalnız real xal — şərti qoyuluş yuxarıda bağlanıb).
+    // Əsas iki oyunçu əlavə ödəmir. Bu raundda iştirak edib pas/uduzan oyunçu 2 × oyun haqqı ödəyib qoşula bilər.
+    // Raund başlayandan sonra otağa gələn oyunçu bu sekaya qoşula bilməz (cari bankdan pay almır) — növbəti yeni raundu gözləyir.
+    this.carry = { pot: this.pot, hands: (this.carry?.hands || 0) + 1 };
+    this.sekaJoin = { base: [a, b], eligible, joined: [], skipped: [], cost: this.settings.ante * 2, carried: this.pot, deadline: now + TIMING.SEKA_JOIN_MS };
+    this.say(`SEKA! Bank (${this.pot} xal) itirilmir — tam həcmi ilə seka əlinə keçir. Əsas oyunçular əlavə ödəmir; qoşulmaq üçün: ${this.sekaJoin.cost} xal.`);
   }
 
   startSekaHand(now) {
@@ -511,14 +518,14 @@ export class Round {
   act(id, action, now = Date.now()) {
     this._act(id, action, now);
     // gizli seçim başqalarına görünən heç nəyi (versiya daxil) dəyişmir
-    if (action?.type !== 'jackpotHide') this.version++;
+    if (action?.type !== 'jackpotHide' && action?.type !== 'look') this.version++;
   }
 
   _act(id, action, now) {
     const t = action?.type;
     const me = this.ps[id];
     if (this.isSecretHolder(id) && ['xod', 'baxis', 'offerSeka', 'offerSplit'].includes(t)) this.secretAce.decided = true;
-    if (this.left.has(id)) throw new GameError('Siz bu raundu tərk etmisiniz.');
+    if (this.left.has(id) && t !== 'look') throw new GameError('Siz bu raundu tərk etmisiniz.');
     switch (t) {
       case 'xod': {
         this.mustTurn(id);
@@ -675,6 +682,12 @@ export class Round {
         if (!['betting', 'offer', 'tieOffer'].includes(this.phase)) throw new GameError('İndi cəkpotu açmaq olmaz.');
         return this.openSecretAce(null);
       }
+      // Oyunçu kartlarına baxdı (küncdən baxma / "Göstər"). Yalnız özünə aiddir, başqalarına heç nə dəyişmir.
+      case 'look': {
+        if (!me) throw new GameError('Sizin kartınız yoxdur.');
+        me.looked = true;
+        return;
+      }
       case 'jackpotHide': {
         if (!this.isSecretHolder(id)) throw new GameError('Sizdə açılmamış cəkpot yoxdur.');
         this.secretAce.decided = true;
@@ -825,7 +838,8 @@ export class Round {
       return {
         id,
         name: this.name(id),
-        balance: this.players.get(id).balance,
+        // MƏXFİLİK: dəqiq balans yalnız oyunçunun özünə göndərilir (başqalarının balansı brauzerə ümumiyyətlə getmir)
+        balance: id === uid ? this.players.get(id).balance : null,
         inHand: !!p,
         status: p ? p.status : 'out',
         attachedTo: p?.attachedTo ?? null,
@@ -834,7 +848,8 @@ export class Round {
         creditPut: this.creditContrib[id] || 0, // şərti (borca) qoyuluş — ayrıca nişanla göstərilir
         discarded: !!(p && p.cards && this.isSeka),
         cards: visible ? p.cards : null,
-        score: visible ? handScore(p.cards) : null,
+        // öz xalım yalnız kartlara baxandan sonra (və ya raund bitəndə); başqasınınkı yalnız açıldıqda
+        score: visible && (id !== uid || p.looked || this.phase === 'finished' || shownIds.has(id)) ? handScore(p.cards) : null,
       };
     });
     const isTurn = this.phase === 'betting' && this.turn === uid;
@@ -848,7 +863,9 @@ export class Round {
         cards: mine.cards,
         discarded: mine.discarded,
         mustDiscard: this.phase === 'discard' && mine.status === 'active' && !mine.cards,
-        score: mine.cards ? handScore(mine.cards) : null,
+        // xal yalnız kartlara baxandan sonra; raund bitəndə öz xalım həmişə görünür
+        score: mine.cards && (mine.looked || this.phase === 'finished') ? handScore(mine.cards) : null,
+        looked: !!mine.looked,
         status: mine.status,
         attachedTo: mine.attachedTo,
         isTurn,
@@ -874,6 +891,8 @@ export class Round {
     if (this.pending) {
       const { votes, ...rest } = this.pending;
       pending = { ...rest, voted: votes ? Object.keys(votes).map(Number) : undefined };
+      // borca oyun təklifində "çatışmayan məbləğ" borclunun balansını göstərir — yalnız iki tərəfə (risk məlumatı)
+      if (pending.type === 'creditOffer' && uid !== pending.from && uid !== pending.to) { delete pending.shortfall; delete pending.turnLeft; }
     }
     let result = null;
     if (this.result) {
@@ -899,6 +918,7 @@ export class Round {
       votesNeeded: Math.ceil((activeCount - 1) / 2),
       pending,
       sekaJoin: this.sekaJoin ? { ...this.sekaJoin, waiting: this.sekaWaiting() } : null,
+      carry: this.carry ? { ...this.carry } : null, // sekadan keçən bank (göstəriş üçün)
       creditPot: this.creditPot,
       creditDeal: this.creditDeal ? { ...this.creditDeal } : null,
       result,

@@ -1190,3 +1190,192 @@ body.in-room { --serif: Georgia, 'Times New Roman', 'Noto Serif', serif; }
 .ctr #deckAnchor { display: block; position: absolute; width: 1px; height: 1px; left: 50%; top: 50%; opacity: 0; }
 .ctr:not(.idle) .bankbox b, .ctr:not(.idle) .bankbox i, .ctr:not(.idle) .credit-pot { white-space: nowrap; }
 .botmark { left: auto !important; right: -8px; bottom: auto !important; top: -4px; transform: none !important; font-size: 8px !important; padding: 0 4px; }
+
+/* ===================== v2.8 ===================== */
+/* onlayn status nöqtəsi (avatarın aşağı sağında). Yaşıl — bağlantı var; qırmızı — kəsilib / masadan çıxıb. Botlarda yoxdur. */
+.ol-dot { position: absolute; right: 2px; bottom: 2px; width: 13px; height: 13px; border-radius: 50%; border: 2px solid #0b130e; z-index: 3; box-shadow: 0 0 0 1px rgba(255,255,255,.15); }
+.ol-dot.on { background: #2fd06b; box-shadow: 0 0 6px rgba(47,208,107,.8); }
+.ol-dot.off { background: #e0413a; }
+.ol-dot.inline { position: relative; display: inline-block; right: auto; bottom: auto; width: 10px; height: 10px; vertical-align: -1px; border-width: 1px; }
+.seat.offline .nm-pill::after { content: none; }
+.bal-pill.put { color: #e8d9b0; font-weight: 600; background: rgba(6,12,8,.7); border-color: rgba(201,163,82,.25); }
+.bal-pill.mine { color: var(--gold-l); }
+/* gizli xal: kartlara baxmamışdan əvvəl */
+.myhand .xal-badge.hidden-score { opacity: .75; letter-spacing: .04em; }
+
+/* çat düyməsi + oxunmamış sayı */
+.sb-btn.chat-toggle { position: relative; }
+.sb-btn.chat-toggle.on { background: rgba(201,163,82,.22); border-color: var(--gold-d); }
+.chat-count { position: absolute; top: -3px; right: -3px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #e0413a; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.chat-count.hidden { display: none; }
+/* çat paneli: masanın üstündə (aşağı idarə panelinin üstündə), oyunu bloklamır */
+.chat-panel { position: absolute; bottom: calc(100% + 4px); left: 8px; right: 8px; max-width: 520px; margin: 0 auto; padding: 6px 10px 8px; border-radius: 14px; background: rgba(12,18,14,.96); border: 1px solid #5b4320; box-shadow: 0 8px 30px rgba(0,0,0,.6); z-index: 31; display: grid; gap: 4px; }
+.cp-head { display: flex; align-items: center; gap: 8px; }
+.cp-head .muted { font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-panel .chat-log { max-height: min(34vh, 260px); min-height: 60px; overflow-y: auto; -webkit-overflow-scrolling: touch; font-size: 13.5px; }
+.chat-log .cm { padding: 2px 0; word-break: break-word; }
+.chat-log .cm.mine b { color: var(--gold-l); }
+.cm-t { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* bağlantı statusu */
+.strip.conn-banner { background: #5a1f1a; border-color: #e0413a; white-space: normal; }
+/* masada borc təklifləri */
+.loan-strip { margin: 4px 10px 0; padding: 7px 12px; border-radius: 10px; background: #233a2a; border: 1px solid #3f8f5a; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.pm-actions { display: grid; gap: 8px; margin: 10px 0; }
+.loan-row { align-items: center; gap: 8px; flex-wrap: wrap; }
+.go-tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: #5a3a0e; color: #ffd98a; vertical-align: 1px; }
+.sj-rule { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- "Şir" tam ekran hədiyyəsi ---------- */
+.lion-fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.lion-fx .ln-dim { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 48%, rgba(60,30,0,.25), rgba(0,0,0,.62) 70%); }
+.lion-fx .ln-stage { position: absolute; left: 50%; top: 46%; width: min(86vw, 62vh, 460px); transform: translate(-50%, -50%); will-change: transform, opacity; filter: drop-shadow(0 12px 30px rgba(0,0,0,.6)) drop-shadow(0 0 30px rgba(255,170,50,.45)); }
+.lion-fx .ln-stage.still { opacity: 1; }
+.lion-fx .lion-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.lion-fx .ln-mane { transform-origin: 200px 206px; transform-box: view-box; }
+.lion-fx .ln-jaw { transform-origin: 200px 300px; transform-box: view-box; }
+.lion-fx .ln-muzzle { transform-origin: 200px 270px; transform-box: view-box; }
+.lion-fx .ln-eyes { transform-origin: 200px 203px; transform-box: view-box; }
+.lion-fx .ln-shake { will-change: transform; }
+.lion-fx .ln-rays { position: absolute; left: 50%; top: 46%; width: max(140vw, 140vh); aspect-ratio: 1; transform: translate(-50%,-50%); opacity: 0;
+  background: repeating-conic-gradient(from 0deg, rgba(255,210,110,.28) 0deg 6deg, rgba(255,210,110,0) 6deg 18deg);
+  -webkit-mask: radial-gradient(circle, #000 0 18%, rgba(0,0,0,.6) 32%, transparent 60%); mask: radial-gradient(circle, #000 0 18%, rgba(0,0,0,.6) 32%, transparent 60%); }
+.lion-fx .ln-glow { position: absolute; left: 50%; top: 46%; width: min(110vw, 90vh, 640px); aspect-ratio: 1; transform: translate(-50%,-50%); border-radius: 50%; background: radial-gradient(circle, rgba(255,214,120,.55), rgba(255,170,40,.18) 45%, transparent 70%); opacity: 0; }
+.lion-fx .ln-glow.still { opacity: .7; }
+.lion-fx .ln-sparks { position: absolute; inset: 0; width: 100%; height: 100%; }
+.lion-fx .ln-rings i { position: absolute; left: 50%; top: 52%; width: min(60vw, 50vh, 340px); aspect-ratio: 1; border-radius: 50%; border: 3px solid rgba(255,214,120,.75); transform: translate(-50%,-50%) scale(.3); opacity: 0; }
+.lion-fx .ln-cap { position: absolute; left: 50%; bottom: max(14%, calc(var(--side-h, 150px) + 10px)); transform: translateX(-50%); padding: 6px 16px; border-radius: 999px; background: rgba(10,14,10,.88); border: 1px solid var(--gold-d); color: var(--text); font-size: 14px; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+.lion-fx .ln-cap b { color: var(--gold-l); }
+.lion-fx.light .ln-stage { filter: none; width: min(50vw, 40vh, 260px); }
+
+/* ---------- v2.8: masa düzülüşü (bütün ekranlar) ----------
+   Oturacaq = avatar (+ status/taymer/onlayn nişanları avatarın üzərində) + ad sətri (ad · banka qoyduğu).
+   Rəqibin kartları avatarın masanın ortasına baxan tərəfində — şaquli yer tutmur, qonşu oturacağa düşmür. */
+.room { --av: 46px; --mc: 17px; }
+.room.n6, .room.n7, .room.n8 { --av: 40px; --mc: 15px; }
+@media (max-width: 360px), (max-height: 420px) { .room { --av: 38px; --mc: 14px; } .room.n6, .room.n7, .room.n8 { --av: 34px; --mc: 13px; } }
+@media (min-width: 1000px) and (min-height: 600px) { .room { --av: 60px; --mc: 22px; } .room.n7, .room.n8 { --av: 52px; --mc: 19px; } }
+.room .seat, .room.n7 .seat, .room.n8 .seat {
+  left: var(--x); top: var(--y); width: auto; display: flex; flex-direction: column; align-items: center; gap: 1px;
+  transform: translate(-50%, calc(var(--av) / -2 - 3px)); grid-template-columns: none;
+}
+.room .seat .av, .room.n7 .seat .av, .room.n8 .seat .av { width: calc(var(--av) + 6px); height: calc(var(--av) + 6px); grid-row: auto; }
+.room .seat .avatar.seat-av { width: var(--av); height: var(--av); font-size: calc(var(--av) * .42); border-width: 2px; }
+.room .seat .nm-pill { max-width: calc(var(--av) * 2.3); font-size: 11px; padding: 0 7px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; display: block; }
+.room .seat .nm-pill .put { margin-left: 4px; color: #e8d9b0; font-weight: 600; font-size: 10.5px; }
+.room .seat .bal-pill { display: none; }
+.room .seat .tag { position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%); z-index: 4; font-size: 9.5px; line-height: 14px; padding: 0 6px; margin: 0; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.room .seat .host { top: -7px; left: -5px; font-size: 13px; }
+.room .seat .botmark { top: -5px; right: -7px; bottom: auto; left: auto; font-size: 8px; padding: 0 3px; display: block; }
+.room .seat .ol-dot { width: 11px; height: 11px; right: 0; bottom: 0; }
+.room .seat .cd, .room.n7 .seat .cd, .room.n8 .seat .cd { left: 50%; right: auto; top: -11px; bottom: auto; transform: translateX(-50%); height: 17px; min-width: 0; padding: 0 6px; font-size: 10.5px; z-index: 5; }
+/* kartlar avatarın yanında (içəri tərəfdə) */
+.room .seat .sc-wrap { position: absolute; top: calc(var(--av) / 2 + 3px); transform: translateY(-50%); display: grid; justify-items: center; gap: 1px; z-index: 1; pointer-events: none; }
+.room .seat.s-l .sc-wrap { left: calc(50% + var(--av) / 2 + 6px); }
+.room .seat.s-r .sc-wrap { right: calc(50% + var(--av) / 2 + 6px); }
+.room .seat .sc-row, .room.n7 .seat .sc-row, .room.n8 .seat .sc-row { display: flex; gap: 0; margin: 0; }
+.room .seat .sc-row .card, .room.n6 .seat .sc-row .card, .room.n7 .seat .sc-row .card, .room.n8 .seat .sc-row .card { width: var(--mc); margin: 0 -2px; }
+.room .seat .sc-row .card:not(.back), .room.n6 .seat .sc-row .card:not(.back), .room.n7 .seat .sc-row .card:not(.back), .room.n8 .seat .sc-row .card:not(.back) { width: calc(var(--mc) * 1.45); margin: 0 -1px; }
+.room .seat .sc-score { font-size: 10px; line-height: 14px; }
+.room .seat .credit-chip { font-size: 9.5px; }
+.room .seat.me .nm-pill { max-width: calc(var(--av) * 2); }
+/* bank: bir az yuxarı, mərkəzdə */
+.room .ctr { top: 42%; }
+/* öz kartlarım: bir az kiçik, sağında "Göstər/Ört" və xal (kartların üstünə düşmür) */
+.room .myhand { --cw: clamp(60px, 18.5vw, 104px); left: 52%; gap: 8px; align-items: flex-end; }
+.room .myhand .hand-side { display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: auto; padding-bottom: 4px; }
+.room .myhand .hand-side .eye-btn { position: static; transform: none; margin: 0; }
+.room .myhand .xal-badge { position: static; transform: none; left: auto; bottom: auto; font-size: 14px; padding: 2px 10px; white-space: nowrap; }
+.room .myhand .xal-badge.dim { font-size: 11.5px; }
+@media (orientation: landscape) and (max-height: 560px) { .room .myhand { --cw: 54px; } }
+@media (max-height: 700px) and (orientation: portrait) { .room .myhand { --cw: clamp(56px, 16.5vw, 92px); } }
+@media (min-width: 1000px) and (min-height: 600px) { .room .myhand { --cw: 96px; } }
+/* toxunma sahələri (ən azı ~34px) */
+.room .rb-title { min-height: 36px; align-content: center; }
+.room .rb-code { height: 34px; }
+.room .stepper { grid-template-columns: 34px 1fr 34px; }
+@media (orientation: portrait) and (max-width: 999px) { .room .ctl-row { grid-template-columns: minmax(128px, 1.5fr) 1fr 1fr 1.2fr; } }
+@media (orientation: portrait) and (max-width: 360px) { .room .ctl-row { grid-template-columns: minmax(118px, 1.4fr) 1fr 1fr 1.1fr; gap: 4px; } .room .stepper { grid-template-columns: 30px 1fr 30px; } }
+@container (min-aspect-ratio: 9/8) {
+  .room .seat, .room.n7 .seat, .room.n8 .seat { left: var(--wx); top: var(--wy); }
+}
+@container (max-aspect-ratio: 9/8) {
+  .room .seat.pt .sc-wrap { left: 50%; right: auto; top: calc(var(--av) + 22px); transform: translateX(-50%); }
+}
+/* çox alçaq landşaft (məs. iPhone SE üfüqi): idarə paneli sıxlaşır */
+@media (orientation: landscape) and (max-height: 360px) {
+  .room .bb { min-height: 40px; font-size: 15px; white-space: nowrap; }
+  .room .stepper { min-height: 40px; }
+  .room .ctrl .hint, .room .gift-ticker { display: none; }
+  .room .offer2 .ob { min-height: 34px; font-size: 12.5px; padding: 4px 6px; }
+  .room .ctrl { gap: 4px; padding-top: 4px; }
+  .room .pot-notes { width: 64px; height: 28px; } .room .pn { width: 38px; }
+  .room .bankbox b { font-size: 18px; } .room .bankbox small { font-size: 11px; }
+}
+.room .bb { white-space: nowrap; }
+/* sıx portret masa (6–8 oyunçu): rəqibin bağlı kartları avatarın içəri-aşağı küncünə kiçik yelpazə kimi yapışır */
+@container (max-aspect-ratio: 9/8) {
+  .room.n6 .seat .sc-wrap, .room.n7 .seat .sc-wrap, .room.n8 .seat .sc-wrap { top: calc(var(--av) * .78); transform: translateY(-50%); }
+  .room.n6 .seat.s-l .sc-wrap, .room.n7 .seat.s-l .sc-wrap, .room.n8 .seat.s-l .sc-wrap { left: calc(50% + var(--av) * .22); right: auto; }
+  .room.n6 .seat.s-r .sc-wrap, .room.n7 .seat.s-r .sc-wrap, .room.n8 .seat.s-r .sc-wrap { right: calc(50% + var(--av) * .22); left: auto; }
+  .room.n6 .seat .sc-row .card.back, .room.n7 .seat .sc-row .card.back, .room.n8 .seat .sc-row .card.back { margin: 0 -4px; }
+  /* açılmış kartlar (nəticə) avatarın yanında qalır */
+  .room.n6 .seat .sc-wrap:has(.card:not(.back)), .room.n7 .seat .sc-wrap:has(.card:not(.back)), .room.n8 .seat .sc-wrap:has(.card:not(.back)) { top: calc(var(--av) / 2 + 3px); }
+  .room.n6 .seat.s-l .sc-wrap:has(.card:not(.back)), .room.n7 .seat.s-l .sc-wrap:has(.card:not(.back)), .room.n8 .seat.s-l .sc-wrap:has(.card:not(.back)) { left: calc(50% + var(--av) / 2 + 4px); }
+  .room.n6 .seat.s-r .sc-wrap:has(.card:not(.back)), .room.n7 .seat.s-r .sc-wrap:has(.card:not(.back)), .room.n8 .seat.s-r .sc-wrap:has(.card:not(.back)) { right: calc(50% + var(--av) / 2 + 4px); }
+}
+/* kiçik masa sahəsi: dekorativ əskinaslar gizlənir, bank məbləği qalır */
+@container (max-height: 300px) { .room .pot-notes { display: none; } .room .pot-row { display: none; } }
+@media (orientation: landscape) and (max-height: 440px) { .room { grid-template-columns: 1fr minmax(270px, 32%); } }
+@media (orientation: landscape) and (max-height: 360px) {
+  .room { grid-template-columns: 1fr 236px; --av: 32px; --mc: 12px; }
+  .room.n6, .room.n7, .room.n8 { --av: 30px; --mc: 11px; }
+  .room .seat .nm-pill { font-size: 10px; line-height: 14px; padding: 0 5px; }
+  .room .myhand { --cw: 46px; }
+}
+
+@container (max-width: 330px) { .room .pot-notes, .room .pot-row { display: none; } }
+/* alçaq masa: öz adım gizlənir (avatar və taymer qalır) — qonşu oturacağa yer qalsın */
+@container (max-height: 430px) { .room .seat.me .nm-pill { display: none; } }
+/* alçaq geniş masa (kiçik telefon üfüqi), 7–8 oyunçu: kartlar avatarın küncündə kiçik yelpazə */
+@container (max-height: 340px) {
+  .room.n7 .seat .sc-wrap, .room.n8 .seat .sc-wrap { top: calc(var(--av) * .78); transform: translateY(-50%); }
+  .room.n7 .seat.s-l .sc-wrap, .room.n8 .seat.s-l .sc-wrap { left: calc(50% + var(--av) * .22); right: auto; }
+  .room.n7 .seat.s-r .sc-wrap, .room.n8 .seat.s-r .sc-wrap { right: calc(50% + var(--av) * .22); left: auto; }
+  .room.n7 .seat .sc-row .card.back, .room.n8 .seat .sc-row .card.back { margin: 0 -4px; }
+  .room.n7 .seat .nm-pill, .room.n8 .seat .nm-pill { max-width: calc(var(--av) * 2.6); }
+}
+@media (orientation: landscape) and (max-height: 360px) { .room.n8 { --av: 27px; --mc: 10px; } .room.n8 .seat .nm-pill { font-size: 9.5px; } }
+@media (orientation: landscape) and (max-height: 360px) { .room .sb-btn { width: 38px; height: 38px; } .room .sbar { gap: 4px; } .room .sbar .chat-form input { height: 38px; padding-left: 10px; } }
+
+/* Şir — istifadəçinin şəkli: portretdə bütün ekranı doldurur, geniş ekranda hündürlüyə görə, kənarları yumşaq */
+.lion-fx .ln-stage.photo { left: 50%; top: 50%; width: 100vw; height: 100%; filter: none; }
+.lion-fx .ln-stage.photo .ln-shake { width: 100%; height: 100%; display: grid; place-items: center; }
+.lion-fx .ln-photo { width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; user-select: none; -webkit-user-drag: none;
+  -webkit-mask: radial-gradient(ellipse 75% 70% at 50% 45%, #000 60%, transparent 100%); mask: radial-gradient(ellipse 75% 70% at 50% 45%, #000 60%, transparent 100%); }
+@media (min-aspect-ratio: 3/4) { .lion-fx .ln-photo { width: auto; height: 100%; aspect-ratio: 941 / 1672; object-fit: contain; } }
+.lion-fx .ln-svgwrap { width: min(86vw, 62vh, 460px); }
+.lion-fx.light .ln-stage.photo { transform: translate(-50%, -50%); }
+.lion-fx.light .ln-photo { width: auto; height: 82%; aspect-ratio: 941 / 1672; object-fit: contain; }
+
+/* portretdə şir masanın üstündə qalır, aşağı idarə paneli (növbə vaxtı, düymələr, çat) görünür */
+@media (orientation: portrait) { body.in-room .lion-fx:not(.light) { bottom: var(--side-h, 0px); } body.in-room .lion-fx .ln-cap { bottom: 12px; } }
+
+/* Şir v2: portal + tullanma + yal qatı (yalnız transform/opacity/clip-path) */
+.lion-fx .ln-portal { position: absolute; left: 50%; top: 44%; width: min(70vw, 52vh, 420px); aspect-ratio: 1; transform: translate(-50%,-50%); opacity: 0; pointer-events: none; }
+.lion-fx .ln-portal i { position: absolute; inset: 0; border-radius: 50%; }
+.lion-fx .ln-portal .p1 { border: 5px solid #ffd76a; box-shadow: 0 0 24px 6px rgba(255,200,80,.85), inset 0 0 30px 8px rgba(255,200,80,.6); }
+.lion-fx .ln-portal .p2 { inset: 7%; background: repeating-conic-gradient(rgba(255,226,140,.9) 0 4deg, transparent 4deg 14deg); -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%, #000 70%, transparent 72%); mask: radial-gradient(circle, transparent 58%, #000 60%, #000 70%, transparent 72%); }
+.lion-fx .ln-pic { position: relative; width: 100%; height: 100%; will-change: clip-path; }
+.lion-fx .ln-pic .ln-photo { position: absolute; inset: 0; }
+.lion-fx .ln-mane-layer { transform-origin: 50% 38%; will-change: transform;
+  -webkit-mask: radial-gradient(ellipse 26% 22% at 50% 38%, transparent 55%, #000 85%); mask: radial-gradient(ellipse 26% 22% at 50% 38%, transparent 55%, #000 85%); }
+@media (min-aspect-ratio: 3/4) { .lion-fx .ln-pic { width: auto; height: 100%; aspect-ratio: 941 / 1672; margin: 0 auto; } .lion-fx .ln-pic .ln-photo { width: 100%; height: 100%; object-fit: cover; } }
+.lion-fx .ln-flash { position: absolute; inset: 0; background: radial-gradient(circle at 50% 40%, rgba(255,240,190,.95), rgba(255,200,90,.3) 45%, transparent 70%); opacity: 0; mix-blend-mode: screen; }
+.lion-fx .ln-pic .ln-photo { -webkit-mask: none; mask: none; object-fit: cover; object-position: 50% 30%; width: 100%; height: 100%; }
+.lion-fx .ln-pic .ln-mane-layer { -webkit-mask: radial-gradient(ellipse 26% 22% at 50% 38%, transparent 55%, #000 85%); mask: radial-gradient(ellipse 26% 22% at 50% 38%, transparent 55%, #000 85%); }
+.lion-fx .ln-stage.photo .ln-shake { -webkit-mask: radial-gradient(ellipse 78% 72% at 50% 45%, #000 62%, transparent 100%); mask: radial-gradient(ellipse 78% 72% at 50% 45%, #000 62%, transparent 100%); }
+@media (min-aspect-ratio: 3/4) {
+  .lion-fx .ln-stage.photo .ln-shake { -webkit-mask: none; mask: none; }
+  .lion-fx .ln-pic { -webkit-mask: radial-gradient(ellipse 50% 50% at 50% 50%, #000 62%, transparent 100%); mask: radial-gradient(ellipse 50% 50% at 50% 50%, #000 62%, transparent 100%); }
+}

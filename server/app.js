@@ -60,6 +60,29 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     `${COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 
   const hits = new Map();
+  // köhnə sürət limiti qeydlərini təmizlə (əks halda Map hər IP/istifadəçi üçün böyüyür — yaddaş artımı)
+  const prune = setInterval(() => {
+    const t = Date.now();
+    for (const [k, arr] of hits) if (!arr.length || t - arr[arr.length - 1] > 10 * 60_000) hits.delete(k);
+  }, 5 * 60_000);
+  prune.unref?.();
+  const startedAt = Date.now();
+  let dbCheck = { at: 0, ok: true, ms: 0 };
+  // Sağlamlıq yoxlaması: baza 3 saniyəyə cavab verirmi + otaq növbələrinin vəziyyəti. Nəticə 5 san keşlənir.
+  async function health() {
+    if (Date.now() - dbCheck.at > 5000) {
+      const t0 = Date.now();
+      let ok = true;
+      try { await Promise.race([db.get('SELECT 1 AS x'), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]); } catch { ok = false; }
+      dbCheck = { at: Date.now(), ok, ms: Date.now() - t0 };
+    }
+    const mem = process.memoryUsage();
+    return {
+      ok: dbCheck.ok, db: dbCheck.ok ? 'ok' : 'cavab vermir', dbMs: dbCheck.ms,
+      uptimeSec: Math.round((Date.now() - startedAt) / 1000), rssMb: Math.round(mem.rss / 1048576), heapMb: Math.round(mem.heapUsed / 1048576),
+      ...rooms.stats(),
+    };
+  }
   function rateLimited(ip, key, max = 10, windowMs = 60_000) {
     const k = `${key}:${ip}`; const t = Date.now();
     const arr = (hits.get(k) || []).filter((x) => t - x < windowMs);
@@ -160,6 +183,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       const prof = await finance.profile(me.id);
       return json(res, 200, { ...prof, stats: await store.pairStats(me.id), user: publicUser(await store.getUser(me.id)) });
     }
+    if (p === '/api/loans/pending' && m === 'GET') return json(res, 200, { loans: await finance.pendingLoans(me.id) });
     if (p === '/api/notifications' && m === 'GET') return json(res, 200, { items: await finance.notifications(me.id) });
     if (p === '/api/notifications/read' && m === 'POST') { await finance.markNotificationsRead(me.id); return json(res, 200, { ok: true }); }
 
@@ -356,7 +380,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     const url = new URL(req.url, 'http://x');
     try {
       if (url.pathname.startsWith('/api/')) return await api(req, res, url);
-      if (url.pathname === '/health') return json(res, 200, { ok: true });
+      if (url.pathname === '/health') { const h = await health(); return json(res, h.ok ? 200 : 503, h); }
       serveStatic(req, res, url);
     } catch (e) {
       if (e instanceof UserError || e instanceof GameError) return json(res, 400, { error: e.message });
@@ -385,6 +409,8 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
+      // ürək döyüntüsü bazaya müraciət etmir (baza ləngisə də bağlantının sağ olduğu bilinsin)
+      if (msg.t === 'ping') { try { ws.send('{"t":"pong"}'); } catch { /* bağlanıb */ } return; }
       try {
         // istifadəçini hər dəfə yeniləyirik (blok, təsdiq, ad dəyişikliyi)
         const u = await store.getUser(user.id);
@@ -402,7 +428,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
           case 'removeBot': rooms.removeBot(u.id, Number(msg.botId)); break;
           case 'kick': rooms.kick(u.id, Number(msg.userId)); break;
           case 'act': await rooms.act(u.id, msg.action || {}); break;
-          case 'ping': ws.send('{"t":"pong"}'); break;
+          case 'look': await rooms.look(u.id); break;
           default: break;
         }
       } catch (e) {
@@ -418,7 +444,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       if (!ws.isAlive) { ws.terminate(); continue; }
       ws.isAlive = false; ws.ping();
     }
-  }, 30_000);
+  }, 15_000); // ölü bağlantılar ən gec ~30 saniyəyə aşkarlanır → oyunçunun statusu qırmızı olur
   ping.unref?.();
 
   return {
@@ -432,6 +458,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     },
     async close() {
       clearInterval(ping);
+      clearInterval(prune);
       debts.stop();
       rooms.stop();
       for (const ws of wss.clients) ws.terminate();

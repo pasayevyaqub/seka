@@ -195,7 +195,19 @@ const MIGRATIONS = [
       await q.run('CREATE INDEX IF NOT EXISTS loans_status ON loans(status, lender_id)');
     },
   },
+  {
+    id: 7,
+    name: 'v2.8: "Şir" hədiyyəsi və hədiyyə üzrə ayrıca "alana keçən faiz" — məlumat silinmir',
+    async up(q, kind) {
+      // NULL = ümumi faiz (gift_share_pct). Mövcud hədiyyələr əvvəlki kimi ümumi faizlə işləyir.
+      await addColumn(q, kind, 'gift_types', 'share_pct', 'INTEGER');
+      await q.run(`INSERT INTO gift_types(id, name, price, active, sort) VALUES ('lion', 'Şir', 500, 1, 4) ON CONFLICT(id) DO NOTHING`);
+    },
+  },
 ];
+
+// PostgreSQL üçün vaxt limitləri: baza cavab verməsə otaq növbəsi sonsuz gözləməsin (donmanın əsas ehtimalı)
+export const PG_LIMITS = { connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000, query_timeout: 15_000, max: 5 };
 
 async function addColumn(q, kind, table, col, type) {
   if (kind === 'pg') {
@@ -240,8 +252,12 @@ export async function openDb({ url = process.env.DATABASE_URL, file } = {}) {
     const pool = new pg.Pool({
       connectionString: url,
       ssl: /localhost|127\.0\.0\.1|host=\//.test(url) ? false : { rejectUnauthorized: false },
-      max: 5,
+      ...PG_LIMITS,
+      keepAlive: true,
     });
+    // Boşda duran bağlantı bazada (məs. Neon yatanda) bağlananda pool 'error' yayır. Dinləyici olmasa Node prosesi
+    // tamamilə dayanır (server "donur"/yenidən başlayır). Burada yalnız loga yazırıq — pool həmin bağlantını atır.
+    pool.on?.('error', (e) => console.error('PG pool xətası (boşdakı bağlantı):', e?.message || e));
     const wrap = (c) => ({
       async all(sql, params = []) { return (await c.query(sql, params)).rows; },
       async get(sql, params = []) { return (await c.query(sql, params)).rows[0] ?? null; },
@@ -252,15 +268,18 @@ export async function openDb({ url = process.env.DATABASE_URL, file } = {}) {
       ...wrap(pool),
       async tx(fn) {
         const client = await pool.connect();
+        let broken = null;
         try {
           await client.query('BEGIN');
           const out = await fn(wrap(client));
           await client.query('COMMIT');
           return out;
         } catch (e) {
-          await client.query('ROLLBACK').catch(() => {});
+          // vaxt limiti / bağlantı xətası: ROLLBACK da gözlənilməsin; bağlantı pool-a qaytarılmır, atılır
+          broken = e;
+          await Promise.race([client.query('ROLLBACK').catch(() => {}), new Promise((r) => setTimeout(r, 2000))]);
           throw e;
-        } finally { client.release(); }
+        } finally { client.release(broken && /timeout|terminat|Connection|ECONN|EPIPE/i.test(String(broken.message)) ? broken : undefined); }
       },
       close: () => pool.end(),
     };

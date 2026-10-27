@@ -20,28 +20,30 @@ function myBalance() {
 function pickHTML(target, cat) {
   const bal = myBalance();
   const rows = cat.gifts.map((g) => {
-    const credited = Math.floor((g.price * cat.sharePct) / 100);
+    const pct = g.sharePct ?? cat.sharePct;
+    const credited = Math.floor((g.price * pct) / 100);
     const short = g.price > bal;
     return `<button type="button" class="gift-opt ${short ? 'short' : ''}" data-a="giftPick" data-g="${esc(g.id)}" ${short ? 'aria-disabled="true"' : ''}>
       <span class="go-ico">${ICON[g.id] || '🎁'}</span>
-      <span class="go-txt"><b>${esc(g.name)}</b><small>Qiymət: ${g.price} xal · ${esc(target.name)} alacaq: <b>${credited} xal</b></small>
+      <span class="go-txt"><b>${esc(g.name)}</b>${g.id === 'lion' ? ' <span class="go-tag">tam ekran</span>' : ''}<small>Qiymət: ${g.price} xal · ${esc(target.name)} alacaq (${pct}%): <b>${credited} xal</b></small>
         ${short ? `<small class="warn-line">Balansınız çatmır (${bal} xal)</small>` : ''}</span>
     </button>`;
   }).join('') || '<p class="muted">Hazırda aktiv hədiyyə yoxdur.</p>';
   return `<div class="gift-to">${avatarHTML(target, 'md')}<div><b>${esc(target.name)}</b><div class="muted" style="font-size:12px">Virtual oyun xalı ilə · balansınız: ${bal} xal</div></div></div>
     <div class="gift-list">${rows}</div>
     <button type="button" class="btn block mt" data-a="askLoanModal" data-id="${target.id}">💸 ${esc(azAblative(target.name))} borc istə</button>
-    <p class="muted" style="font-size:12px">Hədiyyənin qiymətinin ${cat.sharePct}%-i (aşağı yuvarlaqlaşdırılır) alana keçir, qalanı dövriyyədən çıxır. Alanın vaxtı çatmış borcu varsa, gələn xal əvvəlcə borca tutulur.</p>`;
+    <p class="muted" style="font-size:12px">Hər hədiyyənin yanında göstərilən faiz (aşağı yuvarlaqlaşdırılır) alana keçir, qalanı dövriyyədən çıxır. Yalnız virtual oyun xalı — real pula çevrilmir. Alanın vaxtı çatmış borcu varsa, gələn xal əvvəlcə borca tutulur.</p>`;
 }
 
 function confirmHTML(target, g, cat) {
-  const credited = Math.floor((g.price * cat.sharePct) / 100);
+  const pct = g.sharePct ?? cat.sharePct;
+  const credited = Math.floor((g.price * pct) / 100);
   const bal = myBalance();
   return `<div class="gift-confirm">
     <div class="gc-ico">${ICON[g.id] || '🎁'}</div>
     <p><b>${esc(dative(target.name))}</b> <b>«${esc(g.name)}»</b> göndərirsiniz.</p>
     <div class="tx"><div>Balansınızdan çıxılacaq</div><div class="d minus">−${g.price} xal</div></div>
-    <div class="tx"><div>${esc(target.name)} alacaq (${cat.sharePct}%)</div><div class="d plus">+${credited} xal</div></div>
+    <div class="tx"><div>${esc(target.name)} alacaq (${pct}%)</div><div class="d plus">+${credited} xal</div></div>
     <div class="tx"><div>Dövriyyədən çıxır</div><div class="d">${g.price - credited} xal</div></div>
     <div class="tx"><div>Sizdə qalacaq</div><div class="d">${bal - g.price} xal</div></div>
     <div class="row mt"><button class="btn" data-a="giftBack">Geri</button><button class="btn primary" data-a="giftSend">Təsdiq et və göndər</button></div>
@@ -73,7 +75,7 @@ export function giftHandlers(render) {
       const others = room.members.filter((m) => m.id !== S.user.id && !m.isBot && m.id > 0);
       if (!others.length) { toast('Masada hədiyyə göndərmək üçün başqa oyunçu yoxdur.'); return; }
       if (others.length === 1) { openGiftModal(others[0].id, render); return; }
-      S.modal = { title: '🎁 Kimə hədiyyə?', kind: 'tgiftTarget', html: `<div class="gift-list">${others.map((m) => `<button type="button" class="gift-opt" data-a="giftModal" data-id="${m.id}">${avatarHTML({ ...m, isBot: false }, 'md')}<span class="go-txt"><b>${esc(m.name)}</b><small>${m.balance} xal</small></span></button>`).join('')}</div>` };
+      S.modal = { title: '🎁 Kimə hədiyyə?', kind: 'tgiftTarget', html: `<div class="gift-list">${others.map((m) => `<button type="button" class="gift-opt" data-a="giftModal" data-id="${m.id}">${avatarHTML({ ...m, isBot: false }, 'md')}<span class="go-txt"><b>${esc(m.name)}</b></span></button>`).join('')}</div>` };
       render();
     },
     giftPick: async (el) => {

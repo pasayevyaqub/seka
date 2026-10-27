@@ -140,9 +140,10 @@ export function tgiftSettingsHTML() {
     <input name="sharePct" type="number" inputmode="numeric" min="0" max="100" step="1" value="${d.sharePct}" ${admin ? '' : 'disabled'}>
     ${d.gifts.map((g) => `<div class="row tg-row">
       <div><label>${esc(g.name)} — qiymət (xal)</label><input name="price_${esc(g.id)}" type="number" inputmode="numeric" min="1" step="1" value="${g.price}" ${admin ? '' : 'disabled'}></div>
+      <div><label>Alana % (boş = ümumi ${d.sharePct}%)</label><input name="pct_${esc(g.id)}" type="number" inputmode="numeric" min="0" max="100" step="1" value="${g.ownPct ?? ''}" placeholder="${d.sharePct}" ${admin ? '' : 'disabled'}></div>
       <label class="check" style="flex:0 0 auto;margin-top:26px"><input type="checkbox" name="active_${esc(g.id)}" ${g.active ? 'checked' : ''} ${admin ? '' : 'disabled'}> Aktiv</label>
     </div>`).join('')}
-    <p class="muted" style="font-size:12px">Dəyişiklik yalnız bundan sonrakı hədiyyələrə aiddir; keçmiş əməliyyatlarda o anki qiymət və faiz saxlanılıb. Faizin nəticəsi aşağı yuvarlaqlaşdırılır.</p>
+    <p class="muted" style="font-size:12px">Dəyişiklik yalnız bundan sonrakı hədiyyələrə aiddir; keçmiş əməliyyatlarda o anki qiymət və faiz saxlanılıb (tarixçə: "Masa hədiyyələri" siyahısı). Hədiyyəyə ayrıca faiz yazılmasa ümumi faiz tətbiq olunur. Nəticə aşağı yuvarlaqlaşdırılır. Hədiyyələr yalnız virtual xaldır, real pula çevrilmir.</p>
     ${admin ? '<button class="btn primary">Yadda saxla</button>' : '<p class="muted">Ayarları yalnız admin dəyişə bilər.</p>'}
   </form>`;
 }
@@ -244,7 +245,7 @@ export function adminForms(render, reload) {
       if (r) { toast(r.duplicate ? 'Artıq təsdiqlənib.' : 'Kredit verildi.', true); reload(); }
     },
     tgiftSettings: async (data, form) => {
-      const gifts = (A().tgifts?.gifts || []).map((g) => ({ id: g.id, price: Number(data[`price_${g.id}`]), active: data[`active_${g.id}`] === 'on' }));
+      const gifts = (A().tgifts?.gifts || []).map((g) => ({ id: g.id, price: Number(data[`price_${g.id}`]), active: data[`active_${g.id}`] === 'on', sharePct: data[`pct_${g.id}`] === '' ? null : Number(data[`pct_${g.id}`]) }));
       const r = await api('/api/admin/table-gifts/settings', { sharePct: Number(data.sharePct), gifts });
       A().tgifts = { ...A().tgifts, ...r };
       const st = document.getElementById('tgSettings');

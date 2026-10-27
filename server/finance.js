@@ -281,7 +281,7 @@ export class Finance {
       const row = await ctx.q.get(
         `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at) VALUES($1, $2, $3, $3, $4, 'offered', $5, $6) RETURNING id`,
         [lenderId, borrowerId, amount, dueAt, cleanNote(note), t]);
-      await this.notifyIn(ctx, borrowerId, 'loan', `💸 ${lender.display_name} sizə ${money(amount)} borc təklif edir. Profilim bölməsində baxın.`);
+      await this.notifyIn(ctx, borrowerId, 'loan', `💸 ${lender.display_name} sizə ${money(amount)} borc təklif edir. Masada 🤝 zolağından və ya Profilim bölməsindən cavab verin.`);
       return { loanId: Number(row.id), borrowerName: borrower.display_name };
     });
   }
@@ -322,7 +322,7 @@ export class Finance {
       const row = await ctx.q.get(
         `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at) VALUES($1, $2, $3, $3, $4, 'requested', $5, $6) RETURNING id`,
         [lenderId, borrowerId, amount, dueAt, cleanNote(note), t]);
-      await this.notifyIn(ctx, lenderId, 'loan', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istəyir. Profilim bölməsində təsdiqləyin və ya rədd edin.`);
+      await this.notifyIn(ctx, lenderId, 'loan', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istəyir. Masada 🤝 zolağından və ya Profilim bölməsindən təsdiqləyin və ya rədd edin.`);
       return { loanId: Number(row.id), lenderName: lender.display_name };
     });
   }
@@ -478,9 +478,14 @@ export class Finance {
   }
 
   // ---------- masa hədiyyələri (animasiyalı, oyun xalı ilə) ----------
+  // sharePct: alana keçən EFFEKTİV faiz (hədiyyənin öz faizi, yoxdursa ümumi faiz); ownPct: yalnız hədiyyənin öz ayarı (null = ümumi)
   async giftTypes(q = this.db, onlyActive = false) {
-    const rows = await q.all(`SELECT id, name, price, active, sort FROM gift_types ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`);
-    return rows.map((g) => ({ id: g.id, name: g.name, price: Number(g.price), active: Number(g.active) === 1 }));
+    const rows = await q.all(`SELECT id, name, price, active, sort, share_pct FROM gift_types ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`);
+    const common = await this.giftSharePct(q);
+    return rows.map((g) => {
+      const own = g.share_pct == null ? null : Number(g.share_pct);
+      return { id: g.id, name: g.name, price: Number(g.price), active: Number(g.active) === 1, ownPct: own, sharePct: own ?? common };
+    });
   }
   async giftSharePct(q = this.db) {
     const r = await q.get(`SELECT value FROM app_settings WHERE key = 'gift_share_pct'`);
@@ -501,6 +506,12 @@ export class Finance {
         const price = Number(g.price);
         if (!Number.isInteger(price) || price < 1 || price > MAX_AMOUNT) throw new UserError('Hədiyyənin qiyməti müsbət tam ədəd olmalıdır.');
         await q.run('UPDATE gift_types SET price = $1, active = $2 WHERE id = $3', [price, g.active ? 1 : 0, row.id]);
+        // hədiyyəyə ayrıca faiz: boş/null → ümumi faiz istifadə olunur
+        if (g.sharePct !== undefined) {
+          const own = g.sharePct === null || g.sharePct === '' ? null : Number(g.sharePct);
+          if (own !== null && (!Number.isInteger(own) || own < 0 || own > 100)) throw new UserError('Hədiyyənin faizi 0–100 arası tam ədəd olmalıdır (boş = ümumi faiz).');
+          await q.run('UPDATE gift_types SET share_pct = $1 WHERE id = $2', [own, row.id]);
+        }
       }
       return { sharePct: await this.giftSharePct(q), gifts: await this.giftTypes(q) };
     });
@@ -516,13 +527,13 @@ export class Finance {
     if (toId === fromId) throw new UserError('Özünüzə hədiyyə göndərə bilməzsiniz.');
     if (!(toId > 0)) throw new UserError('Botlara hədiyyə göndərmək olmaz.');
     return this.op(key, fromId, 'tgift', async (ctx) => {
-      const g = await ctx.q.get('SELECT id, name, price, active FROM gift_types WHERE id = $1', [String(giftId ?? '')]);
+      const g = await ctx.q.get('SELECT id, name, price, active, share_pct FROM gift_types WHERE id = $1', [String(giftId ?? '')]);
       if (!g) throw new UserError('Hədiyyə tapılmadı.');
       if (Number(g.active) !== 1) throw new UserError('Bu hədiyyə hazırda aktiv deyil.');
       const from = await this.activeUser(ctx.q, fromId);
       const to = await this.activeUser(ctx.q, toId, 'Alıcı');
       const price = Number(g.price);
-      const pct = await this.giftSharePct(ctx.q);
+      const pct = g.share_pct == null ? await this.giftSharePct(ctx.q) : Number(g.share_pct);
       const credited = Math.floor((price * pct) / 100);
       const burned = price - credited;
       const b1 = await this.debit(ctx, fromId, price,
@@ -583,6 +594,19 @@ export class Finance {
       `SELECT l.*, a.display_name AS lender_name, b.display_name AS borrower_name FROM loans l
        JOIN users a ON a.id = l.lender_id JOIN users b ON b.id = l.borrower_id
        WHERE (l.lender_id = $1 OR l.borrower_id = $1) ORDER BY l.id DESC LIMIT 200`, [userId]);
+  }
+
+  /** Masada göstərilən gözləyən borc təklifləri/istəkləri (yalnız mənə aid olanlar) */
+  async pendingLoans(userId) {
+    const rows = await this.db.all(
+      `SELECT l.*, a.display_name AS lender_name, b.display_name AS borrower_name FROM loans l
+       JOIN users a ON a.id = l.lender_id JOIN users b ON b.id = l.borrower_id
+       WHERE l.status IN ('offered', 'requested') AND (l.lender_id = $1 OR l.borrower_id = $1) ORDER BY l.id DESC LIMIT 50`, [userId]);
+    return rows.map(normLoan).map((l) => ({
+      ...l,
+      // mənim cavabımı gözləyən: mənə gələn təklif (borc alan mənəm) və ya məndən istənilən borc (borc verən mənəm)
+      mine: (l.status === 'offered' && l.borrowerId === userId) || (l.status === 'requested' && l.lenderId === userId),
+    }));
   }
 
   async profile(userId) {

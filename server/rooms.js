@@ -17,6 +17,8 @@ export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
 const EMOJI_GAP_MS = 3000;
 const CHAT_GAP_MS = 1500;
 const CHAT_MAX = 120;
+const CHAT_KEEP = 100;                   // otaqda saxlanılan son mesajlar (yaddaşda, bazada yox)
+const ROOM_TASK_WARN_MS = 10_000;        // otaq növbəsində bundan uzun çəkən iş loga yazılır (donma diaqnostikası)
 
 function int(v, min, max, def) {
   const n = Math.floor(Number(v));
@@ -155,14 +157,28 @@ export class RoomManager {
     if (room.chatLog.length > 30) room.chatLog.shift();
   }
 
+  // Otaq növbəsi: oyun hərəkətləri, pul əməliyyatları və taymerlər ardıcıl icra olunur.
+  // Uzun çəkən iş (məs. baza cavab vermir) loga yazılır — donmanın səbəbini tapmaq üçün.
+  timed(room, fn) {
+    return async () => {
+      const t0 = Date.now();
+      room.busySince = t0;
+      try { return await fn(); } finally {
+        room.busySince = 0;
+        const ms = Date.now() - t0;
+        if (ms > ROOM_TASK_WARN_MS) console.warn(`Otaq ${room.code}: növbədəki iş ${ms} ms çəkdi`);
+      }
+    };
+  }
+
   enqueue(room, fn) {
-    room.queue = room.queue.then(fn).catch((e) => console.error('room queue', e));
+    room.queue = room.queue.then(this.timed(room, fn)).catch((e) => console.error('room queue', e?.message || e));
     return room.queue;
   }
 
   // otaq növbəsində icra et və nəticəni/xətanı çağırana qaytar
   runQ(room, fn) {
-    const p = room.queue.then(fn);
+    const p = room.queue.then(this.timed(room, fn));
     room.queue = p.catch(() => {});
     return p;
   }
@@ -251,7 +267,8 @@ export class RoomManager {
   }
 
   seat(room, user) {
-    room.members.set(user.id, { id: user.id, name: user.display_name, balance: Number(user.balance), connected: true, isBot: false, avatarVer: Number(user.avatar_ver || 0) });
+    // joinedAt: çat tarixçəsi yalnız otağa qoşulandan sonrakı mesajları göstərir (əvvəlki söhbət yeni gələnə açılmır)
+    room.members.set(user.id, { id: user.id, name: user.display_name, balance: Number(user.balance), connected: this.sockets.has(user.id), isBot: false, avatarVer: Number(user.avatar_ver || 0), joinedAt: Date.now() });
     room.seats.push(user.id);
     this.userRoom.set(user.id, room.code);
     room.practice.set(user.id, PRACTICE_START); // məşq otağına hər girişdə demo balans yenidən 10 000
@@ -381,8 +398,8 @@ export class RoomManager {
     const m = room.members.get(userId);
     room.chatMsgs = room.chatMsgs || [];
     room.chatMsgs.push({ t, userId, name: m?.name ?? '?', text: msg });
-    if (room.chatMsgs.length > 50) room.chatMsgs.shift();
-    this.bubble(room, { userId, kind: 'text', value: msg, name: m?.name });
+    if (room.chatMsgs.length > CHAT_KEEP) room.chatMsgs.shift();
+    this.bubble(room, { userId, kind: 'text', value: msg, name: m?.name, ts: t });
   }
 
   // yalnız otaq üzvlərinə; masa vəziyyətini yenidən göndərmir (formalar sıfırlanmır)
@@ -503,6 +520,22 @@ export class RoomManager {
       await this.applyEffects(room);
     });
     if (err) throw err;
+  }
+
+  // Oyunçu öz kartlarına baxdı: yalnız onun görünüşü dəyişir (xal nişanı) — başqalarına heç nə göndərilmir
+  async look(userId) {
+    const room = this.roomOf(userId);
+    const r = room.round;
+    if (!r || !r.ps[userId] || r.ps[userId].looked) return;
+    await this.enqueue(room, async () => {
+      if (room.round !== r || !r.ps[userId]) return;
+      r.act(userId, { type: 'look' }, Date.now());
+      if (!this.isBlocked(room)) {
+        const v = this.view(room, userId);
+        room.confirmedViews.set(userId, v);
+        this.send(userId, { t: 'room', room: { ...v, dbWaiting: null } });
+      }
+    });
   }
 
   // Mühərrikin pul hərəkətlərini paketə yığ (sabit batchId ilə), bazaya yaz və hamıya göndər
@@ -710,13 +743,17 @@ export class RoomManager {
       members: room.seats.map((id) => {
         const m = room.members.get(id);
         return {
-          id, name: m.name, isBot: !!m.isBot, connected: m.connected, avatarVer: m.avatarVer || 0,
-          balance: practice ? (room.practice.get(id) ?? PRACTICE_START) : m.balance,
+          id, name: m.name, isBot: !!m.isBot, avatarVer: m.avatarVer || 0,
+          // onlayn status: insan üçün canlı WebSocket bağlantısı var/yox. Bot üçün göstərilmir (insan kimi görünməsin).
+          connected: m.isBot ? null : !!m.connected,
+          // MƏXFİLİK: dəqiq balans yalnız oyunçunun özünə; başqalarına ümumiyyətlə göndərilmir
+          balance: id === uid ? (practice ? (room.practice.get(id) ?? PRACTICE_START) : m.balance) : null,
         };
       }),
       round: r ? r.viewFor(uid, now) : null,
       chat: room.chatLog || [],
-      chatMsgs: (room.chatMsgs || []).slice(-30),
+      // çat tarixçəsi: yalnız otaq üzvlərinə və yalnız onun otağa qoşulduğu andan sonrakı mesajlar
+      chatMsgs: (room.chatMsgs || []).filter((c) => c.t >= (room.members.get(uid)?.joinedAt ?? Infinity)).slice(-CHAT_KEEP),
       serverNow: now,
       dbWaiting: null,
     };
@@ -759,12 +796,27 @@ export class RoomManager {
       .sort((a, b) => a.name.localeCompare(b.name, 'az'));
   }
 
+  // sağlamlıq yoxlaması üçün ümumi göstəricilər (şəxsi məlumat yoxdur)
+  stats() {
+    const now = Date.now();
+    let blocked = 0; let busyLong = 0; let rounds = 0;
+    for (const r of this.rooms.values()) {
+      if (this.isBlocked(r)) blocked++;
+      if (r.busySince && now - r.busySince > ROOM_TASK_WARN_MS) busyLong++;
+      if (this.roundRunning(r)) rounds++;
+    }
+    return { rooms: this.rooms.size, activeRounds: rounds, roomsWaitingDb: blocked, roomsBusyLong: busyLong, sockets: this.sockets.size };
+  }
+
   tick() {
     const now = Date.now();
     for (const room of this.rooms.values()) {
       const r = room.round;
-      if (r && r.phase !== 'finished' && !this.isBlocked(room)) {
+      // əvvəlki taymer işi hələ növbədədirsə yenisi əlavə edilmir (baza ləngiyəndə növbə və yaddaş şişməsin)
+      if (r && r.phase !== 'finished' && !this.isBlocked(room) && !room.tickQueued) {
+        room.tickQueued = true;
         this.enqueue(room, async () => {
+          room.tickQueued = false;
           if (room.round !== r || r.phase === 'finished' || this.isBlocked(room)) return;
           const t = Date.now();
           if (r.tick(t)) return this.applyEffects(room);

@@ -84,6 +84,42 @@ function tone(t, freq, dur, gain, type = 'triangle') {
   o.start(t); o.stop(t + dur + 0.02);
 }
 
+// Şirin nəriltisi — tam orijinal sintez (xarici səs faylı yoxdur): alçaq "sawtooth" tonu enən tezliklə,
+// xırıltı üçün aşağı tezlikli titrəmə (LFO) və alçaq keçiricidən keçən küy. ~1.7 saniyə.
+function roar(t) {
+  const dur = 1.7;
+  const o = ctx.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(95, t);
+  o.frequency.linearRampToValueAtTime(150, t + 0.35);
+  o.frequency.exponentialRampToValueAtTime(62, t + dur);
+  const growl = ctx.createOscillator(); growl.frequency.value = 27;
+  const growlGain = ctx.createGain(); growlGain.gain.value = 0.45;
+  const amp = ctx.createGain(); amp.gain.value = 0.55;
+  growl.connect(growlGain).connect(amp.gain);
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(500, t); lp.frequency.linearRampToValueAtTime(1300, t + 0.4); lp.frequency.exponentialRampToValueAtTime(380, t + dur); lp.Q.value = 4;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t); env.gain.exponentialRampToValueAtTime(0.5, t + 0.12); env.gain.setValueAtTime(0.5, t + 0.9); env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(amp).connect(lp).connect(env).connect(ctx.destination);
+  const src = ctx.createBufferSource(); src.buffer = noise(dur);
+  const nf = ctx.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 420; nf.Q.value = 0.8;
+  const ng = ctx.createGain(); ng.gain.setValueAtTime(0.0001, t); ng.gain.exponentialRampToValueAtTime(0.35, t + 0.15); ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(nf).connect(ng).connect(ctx.destination);
+  for (const x of [o, growl, src]) { x.start(t); x.stop(t + dur + 0.05); }
+}
+
+/** "Səsi yoxla": istifadəçinin öz kliki ilə qısa test səsi (oyun səsləri söndürülübsə də çalınır — yalnız yoxlama üçün) */
+export function soundTest() {
+  unlock();
+  if (!ctx) return { ok: false, reason: 'bu brauzer WebAudio dəstəkləmir' };
+  try {
+    const t = ctx.currentTime + 0.05;
+    [523.25, 659.25, 783.99].forEach((f, i) => tone(t + i * 0.16, f, 0.3, 0.14, 'sine'));
+    swish(t + 0.55, 0.3);
+    return { ok: true, muted, state: ctx.state };
+  } catch (e) { return { ok: false, reason: String(e?.message || e) }; }
+}
+
 export function play(name, n = 1) {
   if (!ready()) return;
   try {
@@ -95,6 +131,7 @@ export function play(name, n = 1) {
     else if (name === 'gift_card_rain') for (let i = 0; i < 8; i++) swish(t + i * 0.09, 0.22);
     else if (name === 'gift_table_king') { [392, 523.25, 659.25, 783.99].forEach((f, i) => tone(t + i * 0.14, f, 0.5, 0.1)); tone(t + 0.6, 1046.5, 0.9, 0.08, 'sine'); }
     else if (name === 'gift_fire_ace') { whoosh(t); [659.25, 880, 1318.5].forEach((f, i) => tone(t + 0.35 + i * 0.12, f, 0.6, 0.09)); }
+    else if (name === 'gift_lion') roar(t + 1.22); // animasiyada nəriltinin anı (~1.28 san)
     else if (name === 'turn') { tone(t, 880, 0.15, 0.07, 'sine'); tone(t + 0.13, 1175, 0.2, 0.06, 'sine'); }
   } catch { /* səs olmasa da oyun davam edir */ }
 }

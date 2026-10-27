@@ -1,9 +1,10 @@
 import { cardSVG } from './cards.js';
-import { S, esc, fmt, money, toast, api, isStaff, isAdmin, isDemo, txList, fmtCents, fmtDate, avatarHTML, moneyCall, azLower, azAblative } from './core.js';
-import { renderRoom, showBubble } from './room.js';
+import { S, esc, fmt, money, toast, api, isStaff, isAdmin, isDemo, txList, fmtCents, fmtDate, avatarHTML, moneyCall, azLower, azAblative, azDative } from './core.js';
+const dativeName = (n) => azDative(n);
+import { renderRoom, showBubble, markChatSeen, updateChatBadge } from './room.js';
 import { onRoom as fxOnRoom, afterRender as fxAfterRender } from './fx.js';
-import { toggleMute } from './sound.js';
-import { onGiftEvent, toggleAnimations, clearGiftQueue } from './giftfx.js';
+import { toggleMute, soundTest } from './sound.js';
+import { onGiftEvent, toggleAnimations, clearGiftQueue, preloadLion } from './giftfx.js';
 import { giftHandlers } from './gifts.js';
 import { installPeek, afterRenderPeek } from './peek.js';
 import { morph } from './morph.js';
@@ -23,9 +24,19 @@ function connect() {
   if (S.ws && S.ws.readyState <= 1) return;
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   S.ws = ws;
-  ws.onopen = () => { S.wsRetry = 0; };
+  S.lastMsgAt = Date.now();
+  ws.onopen = () => {
+    S.wsRetry = 0;
+    S.lastMsgAt = Date.now();
+    const was = S.conn;
+    S.conn = 'online';
+    if (was && was !== 'online') { toast('Bağlantı bərpa olundu.', true); render(); }
+    loadPendingLoans();
+  };
   ws.onmessage = (ev) => {
+    S.lastMsgAt = Date.now();
     const m = JSON.parse(ev.data);
+    if (m.t === 'pong') return;
     if (m.t === 'hello') {
       S.user = m.user;
       if (!m.roomCode && S.view === 'room') { S.room = null; S.view = 'lobby'; }
@@ -38,6 +49,7 @@ function connect() {
     } else if (m.t === 'room') {
       try { fxOnRoom(S.room, m.room); } catch { /* animasiya oyunu dayandırmamalıdır */ }
       S.room = m.room;
+      if (!m.room.practice) preloadLion(); // "Şir" şəkli əvvəlcədən yüklənsin (bir dəfə)
       S.busy = false;
       S.clockOffset = m.room.serverNow - Date.now();
       if (S.view !== 'admin' && S.view !== 'profile') S.view = 'room';
@@ -61,6 +73,7 @@ function connect() {
       toast(m.text, true);
       S.unread++;
       updateBell();
+      if (m.kind === 'loan') loadPendingLoans();
       if (S.view === 'profile') loadProfile(render);
     } else if (m.t === 'staff') {
       toast(m.text, true);
@@ -76,6 +89,8 @@ function connect() {
     S.ws = null;
     if (ev.code === 4001 || ev.code === 1008) { S.user = null; S.view = 'auth'; render(); return; }
     if (!S.user) return;
+    // aydın status: "yenidən qoşulur…" (oyun vəziyyəti yenilənmir) — qoşulanda server son vəziyyəti özü göndərir
+    if (S.conn !== 'reconnecting') { S.conn = 'reconnecting'; render(); }
     const delay = Math.min(10000, 800 * 2 ** S.wsRetry++);
     setTimeout(async () => {
       try { const r = await api('/api/me'); if (!r.user) { S.user = null; S.view = 'auth'; render(); return; } } catch { /* şəbəkə */ }
@@ -83,6 +98,58 @@ function connect() {
     }, delay);
   };
 }
+// Ürək döyüntüsü: 20 saniyədən bir ping. 45 saniyə heç bir mesaj gəlməsə bağlantı "ölü" sayılır və yenidən qurulur
+// (telefon yuxudan oyananda, şəbəkə dəyişəndə və ya server yenidən başlayanda yarımçıq açıq qalan bağlantılar).
+setInterval(() => {
+  const ws = S.ws;
+  if (!ws || ws.readyState !== 1) return;
+  if (Date.now() - (S.lastMsgAt || 0) > 45_000) { try { ws.close(); } catch { /* */ } return; }
+  try { ws.send('{"t":"ping"}'); } catch { /* */ }
+}, 20_000);
+function reconnectNow() {
+  if (!S.user) return;
+  if (S.ws && S.ws.readyState === 1 && Date.now() - (S.lastMsgAt || 0) < 45_000) return;
+  if (S.ws && S.ws.readyState <= 1) { try { S.ws.close(); } catch { /* */ } }
+  S.wsRetry = 0;
+  connect();
+}
+window.addEventListener('online', reconnectNow);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reconnectNow(); });
+
+async function loadPendingLoans() {
+  if (!S.user || isDemo()) return;
+  try {
+    const r = await api('/api/loans/pending');
+    S.pendingLoans = r.loans;
+    if (S.view === 'room') render();
+    if (S.modal?.kind === 'loans') { S.modal = loansModalState(); render(); }
+  } catch { /* sonra */ }
+}
+
+function loansModalState() {
+  const list = S.pendingLoans || [];
+  const mine = list.filter((l) => l.mine);
+  const out = list.filter((l) => !l.mine);
+  const row = (l) => {
+    const offered = l.status === 'offered';
+    const iAmLender = l.lenderId === S.user.id;
+    const who = iAmLender ? l.borrowerName : l.lenderName;
+    const what = offered
+      ? (iAmLender ? `Siz ${esc(who)}-a ${fmt(l.amount)} borc təklif etmisiniz` : `${esc(who)} sizə ${fmt(l.amount)} borc təklif edir`)
+      : (iAmLender ? `${esc(who)} sizdən ${fmt(l.amount)} borc istəyir` : `Siz ${esc(who)}-dan ${fmt(l.amount)} borc istəmisiniz`);
+    let btns = '';
+    if (l.mine && offered) btns = `<button class="btn small green" data-a="loanDo" data-op="accept" data-id="${l.id}">Qəbul et</button><button class="btn small red" data-a="loanDo" data-op="decline" data-id="${l.id}">Rədd et</button>`;
+    else if (l.mine) btns = `<button class="btn small green" data-a="loanDo" data-op="approve" data-id="${l.id}">Təsdiqlə və ver</button><button class="btn small red" data-a="loanDo" data-op="reject" data-id="${l.id}">Rədd et</button>`;
+    else if (offered) btns = `<button class="btn small" data-a="loanDo" data-op="cancel" data-id="${l.id}">Ləğv et</button>`;
+    else btns = `<button class="btn small" data-a="loanDo" data-op="withdraw" data-id="${l.id}">Geri götür</button>`;
+    return `<div class="tx loan-row" data-key="loan${l.id}"><div>${what}<div class="meta">Qaytarma: ${fmtDate(l.dueAt)} · faiz yoxdur${l.note ? ` · ${esc(l.note)}` : ''}</div></div><div class="row" style="flex:0 0 auto;gap:6px">${btns}</div></div>`;
+  };
+  return { title: '🤝 Borc təklifləri və istəkləri', kind: 'loans',
+    html: `<p class="muted" style="font-size:12.5px">Qəbul/təsdiq edilənə qədər heç kimin balansı və borcu dəyişmir. Təsdiq anında hər iki balans serverdə bir tranzaksiyada yoxlanılır. Masadan və raunddan çıxmırsınız.</p>
+      <h4>Cavabınızı gözləyir</h4>${mine.map(row).join('') || '<p class="muted">Yoxdur.</p>'}
+      <h4>Göndərdikləriniz</h4>${out.map(row).join('') || '<p class="muted">Yoxdur.</p>'}` };
+}
+
 const send = (msg) => {
   if (S.ws?.readyState === 1) { S.ws.send(JSON.stringify(msg)); return true; }
   toast('Serverlə əlaqə yoxdur, yenidən qoşulur...');
@@ -168,6 +235,9 @@ function render() {
     if (side) document.documentElement.style.setProperty('--side-h', `${side.offsetHeight}px`);
     try { fxAfterRender(); } catch { /* yox */ }
     try { afterRenderPeek(); } catch { /* yox */ }
+    // kartlara baxıldı → serverə bir dəfə bildir (xal yalnız bundan sonra gəlir)
+    if (S.lookWanted && S.lookSent !== S.lookWanted && S.ws?.readyState === 1) { S.lookSent = S.lookWanted; send({ t: 'look' }); }
+    if (S.chatOpen) markChatSeen(); else updateChatBadge();
   }
 }
 
@@ -448,6 +518,52 @@ const H = {
   emoji: (el) => { send({ t: 'emoji', e: el.dataset.e }); if (S.emojiOpen) { S.emojiOpen = false; render(); } },
   toggleEmoji: () => { S.emojiOpen = !S.emojiOpen; render(); },
   toggleLog: () => { S.logOpen = !S.logOpen; render(); },
+  toggleChat: () => {
+    S.chatOpen = !S.chatOpen;
+    if (S.chatOpen) markChatSeen();
+    render();
+    if (S.chatOpen) { const l = document.querySelector('.chat-panel .chat-log'); if (l) l.scrollTop = l.scrollHeight; }
+  },
+  soundTest: () => {
+    const r = soundTest();
+    toast(r.ok ? `Test səsi çalındı.${r.muted ? ' Oyun səsləri hazırda SÖNDÜRÜLÜB — 🔊 düyməsi ilə açın.' : ''} Eşitmirsinizsə: telefonun səsini və iPhone-da səssiz rejim açarını yoxlayın.` : `Səs işə düşmədi: ${r.reason}`, r.ok);
+  },
+  playerMenu: (el) => {
+    const id = Number(el.dataset.id);
+    const m = S.room?.members.find((x) => x.id === id);
+    if (!m || m.isBot || S.room.practice) return;
+    const online = m.connected === true;
+    S.modal = { title: esc(m.name), kind: 'playerMenu', html: `<div class="gift-to">${avatarHTML(m, 'md')}<div><b>${esc(m.name)}</b><div class="muted" style="font-size:12px"><span class="ol-dot inline ${online ? 'on' : 'off'}"></span> ${online ? 'Onlayn' : 'Bağlantı kəsilib'}</div></div></div>
+      <div class="pm-actions">
+        <button class="btn block" data-a="giftModal" data-id="${id}">🎁 Hədiyyə göndər</button>
+        <button class="btn block" data-a="askLoanModal" data-id="${id}">💸 Borc istə</button>
+        <button class="btn block" data-a="offerLoanModal" data-id="${id}">🤝 Borc təklif et</button>
+      </div>
+      <p class="muted" style="font-size:12px">Masadan çıxmırsınız, raund davam edir. Borc yalnız qarşı tərəf qəbul/təsdiq edəndə yaranır. Virtual oyun xalı — real pul deyil, faiz yoxdur.</p>` };
+    render();
+  },
+  offerLoanModal: (el) => {
+    const id = Number(el.dataset.id);
+    const m = S.room?.members.find((x) => x.id === id);
+    S.modal = { title: `🤝 ${esc(dativeName(m?.name || ''))} borc təklif et`, kind: 'offerLoan', borrowerId: id, submitLabel: 'Təklifi göndər',
+      text: `${esc(m?.name || '')} qəbul edənə qədər heç nə dəyişmir. Qəbul anında məbləğ balansınızdan çıxır və ona keçir (balansınız o an çatmalıdır). Müddət çatanda qalan borc onun balansından avtomatik tutulur. Faiz yoxdur.`,
+      fields: [{ name: 'amount', label: 'Məbləğ (xal)', type: 'number' },
+        { name: 'days', label: 'Qaytarma müddəti', type: 'select', value: '7', options: [['1', '1 gün'], ['3', '3 gün'], ['7', '7 gün'], ['14', '14 gün'], ['30', '30 gün']] }] };
+    render();
+  },
+  loansModal: () => { S.modal = loansModalState(); render(); loadPendingLoans(); },
+  loanDo: async (el) => {
+    const id = Number(el.dataset.id); const op = el.dataset.op;
+    const l = (S.pendingLoans || []).find((x) => x.id === id);
+    if (op === 'approve' && l && !confirm(`${l.borrowerName}-a ${fmt(l.amount)} verilsin? Məbləğ indi balansınızdan çıxacaq.`)) return;
+    if (op === 'accept' && l && !confirm(`${l.lenderName}-dan ${fmt(l.amount)} borcu qəbul edirsiniz? Qaytarma: ${fmtDate(l.dueAt)}.`)) return;
+    el.disabled = true;
+    try {
+      const r = await moneyCall(`loan${op}${id}`, `/api/loans/${id}/${op}`, {});
+      if (!r) return;
+      toast({ accept: 'Borc qəbul edildi.', decline: 'Rədd edildi.', approve: 'Borc verildi.', reject: 'Rədd edildi.', cancel: 'Təklif ləğv edildi.', withdraw: 'İstək geri götürüldü.' }[op], true);
+    } catch (e) { toast(e.message); } finally { await loadPendingLoans(); }
+  },
   toggleShowHand: (el) => { S.showHand = S.showHand === el.dataset.hand ? null : el.dataset.hand; render(); },
   toggleAnim: () => { const off = toggleAnimations(); if (off) clearGiftQueue(); toast(off ? 'Animasiyalar söndürüldü.' : 'Animasiyalar açıldı.', true); render(); },
   toggleSound: () => { const m = toggleMute(); toast(m ? 'Səs söndürüldü.' : 'Səs açıldı.', true); render(); },
@@ -558,10 +674,16 @@ document.addEventListener('submit', async (ev) => {
       const m = S.modal;
       if (m.kind === 'creditOffer') {
         act({ type: 'creditOffer', limit: Number(data.limit), dueDays: Number(data.dueDays) });
+      } else if (m.kind === 'offerLoan') {
+        const r = await moneyCall(`offerLoan${m.borrowerId}`, '/api/loans/offer', { borrowerId: m.borrowerId, amount: Number(data.amount), dueAt: Date.now() + Number(data.days) * 86_400_000 });
+        if (!r) return;
+        toast(`Təklif ${r.borrowerName} üçün göndərildi. Qəbul edəndə xal balansınızdan keçəcək.`, true);
+        loadPendingLoans();
       } else if (m.kind === 'askLoan') {
         const r = await moneyCall(`askLoan${m.lenderId}`, '/api/loans/request', { lenderId: m.lenderId, amount: Number(data.amount), dueAt: Date.now() + Number(data.days) * 86_400_000 });
         if (!r) return;
         toast(`İstək ${r.lenderName} üçün göndərildi. Təsdiqləyəndə xal balansınıza keçəcək.`, true);
+        loadPendingLoans();
       } else if (m.kind === 'settings') {
         const settings = {};
         for (const [k] of SETTINGS_FIELDS) settings[k] = data[k];

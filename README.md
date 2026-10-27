@@ -2,7 +2,7 @@
 
 Saytın görünən adı **Dairə**-dir. Oyunun özü Seka qaydaları ilə oynanılır və oyun daxilində "seka" termini saxlanılıb. Real-time multiplayer oyundur. İnterfeys Azərbaycan dilindədir və mobil uyğundur. Otaqlar adlı ola bilər, açıq və ya gizli, istəyə görə şifrəli. Bütün məbləğlər **virtual oyun balansıdır** və **xal** kimi göstərilir (v2.4-dən əvvəl "AZN" yazılırdı; məbləğlər eynidir). Real pul yatırma, nağdlaşdırma, faiz və ödəniş sistemi **yoxdur**.
 
-Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **2.7.1**.
+Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **2.8.0**.
 
 ## 1. Öz kompüterinizdə işə salmaq
 1. **Node.js** quraşdırın: https://nodejs.org (LTS, minimum 22.13).
@@ -168,6 +168,17 @@ Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
 5. Yaranan borc adi oyunçu borcudur: qaytarma, avtomatik tutulma, profil və admin bölmələri eyni işləyir. Mövcud borclar silinmir. Hesablar heç vaxt silinmir (yalnız bloklanır), ona görə alacaq itmir.
 6. "Kimdən udmuşam / kimə uduzmuşam" statistikası yalnız real xal axınlarını sayır.
 
+## 5d. Sekadan qalan bank (v2.8 qaydası)
+Mövcud qaydalarla uyğun olaraq aşağıdakı fərziyyə qəbul edilib:
+- Seka (bərabərlik və ya razılaşma) olanda bank **bölünmür və itmir** — tam məbləği ilə seka əlinə ("növbəti raund") keçir. Masada "BANK · sekadan X" yazılır.
+- **Əsas iki oyunçu** əlavə ödəmir (onların payı artıq bankdadır).
+- Bu raundda iştirak edib pas deyən/uduzan oyunçu **2 × oyun haqqı** (məs. haqq 10 xal → qoşulma 20 xal) qoyub qoşula bilər. Qoşulmayan heç nə ödəmir, amma əvvəl qoyduğu bankda qalır.
+- **Raund başlayandan sonra otağa gələn oyunçu** bu sekaya qoşula bilməz (cari bankdan pay almır). O, növbəti yeni raunddan adi oyun haqqı ilə oynayır.
+- Bank yalnız **real balansdan** qoyulan xallardan ibarətdir. "Borca oyna" ilə qoyulan şərti xallar seka başlamazdan əvvəl bağlanır (borclunun öz payı ləğv olur, qarşı tərəfin payı borc yazılır) və keçən banka **daxil edilmir** — ikinci dəfə sayılmır.
+- Seka əlində yenə bərabərlik → yenə seka (bank yenə tam keçir) və ya bölünmə (tək qalan 1 xal ilk tərəfə düşür, xal itmir). Seka əlində cəkpot → bank və cəkpot haqqı sahibinə.
+- Əsas oyunçu qoşulma vaxtı çıxsa — payı bankda qalır, seka qalanlarla oynanılır. Hamı çıxsa və ya raund ləğv olunsa (server yenidən başlaması, otağın bağlanması) — hər kəsə qoyduğu qaytarılır.
+- Testlər: `test/v28-engine.test.js` (pul saxlanma balansı: balanslar + bank həmişə sabit).
+
 ## 5c. Sekaya qoşulma
 - Qoşulmaq üçün **60 saniyə** verilir (təklifə cavab — 20, "eyni xala baxaq" və bərabər xal qərarı — 30, dörd kartdan birini atmaq — 30 saniyə; hamısı ayrı idarə olunur).
 - Qalan vaxt və "Sekaya qoşul" / "Qoşulmuram" düymələri aydın görünür.
@@ -262,6 +273,13 @@ Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
 - İdarə tək sıradadır: [− xal +] · Pas · Baxış · Xod et. Alt sətir: 😊 · mesaj · 🎁 · ☰ (bildirişlər, profil, səs, animasiyalar, çat, jurnal).
 - Bütün məbləğlər "xal" ilə göstərilir (məs. "10 000 xal").
 
+## 9a-1. "Şir" (tam ekran hədiyyə, v2.8)
+- Otaq hədiyyələrinə **Şir** əlavə edilib (ilkin qiymət 500 xal). Göndərmədən əvvəl qiymət, alana keçən pay və sizdə qalacaq balans göstərilir.
+- Xal yalnız serverdə uğurlu əməliyyatda bir dəfə çıxılır; eyni sorğu (eyni açar) təkrar gəlsə ikinci dəfə tutulmur və animasiya ikinci dəfə oynamır.
+- Animasiya (~3,2 san): istifadəçinin verdiyi şir şəkli əsasında (`public/lion.webp`, 200 KB; zəif cihaz üçün `lion-sm.webp`, 87 KB). Qızılı dairə (portal) açılır → şir dairənin içindən görünüb ekrana tullanır → nərildəyir (yaxınlaşma zərbəsi, yüngül titrəmə, işıq çaxması, sintez olunmuş nərilti səsi) → qızılı halqalar, şüalar və qığılcımlar yayılır → yal küləkdə yellənir (şəklin yal hissəsi ayrıca qatdır, üz sabit qalır) → şir işığa qarışıb çəkilir. Yalnız transform/opacity/clip-path istifadə olunur (GPU), qığılcımlar məhduddur. Şəkil otağa girəndə əvvəlcədən yüklənir; yüklənməsə kodla çəkilmiş SVG şir göstərilir. Portretdə aşağı idarə paneli (növbə vaxtı, düymələr, çat) açıq qalır; animasiya qatı toxunuşları buraxır.
+- "Animasiyalar: söndürülüb" → yalnız bildiriş zolağı. "Hərəkəti azalt" sistem ayarı və ya zəif telefon (≤2 nüvə / ≤2 GB) → yüngül variant (az detallı şəkil, yalnız görünüb-itmə). Səsi 🔊 düyməsi ilə söndürmək olar.
+- Admin → Masa hədiyyələri: qiymət, aktivlik və **hər hədiyyə üçün ayrıca "alana %"** (boş = ümumi faiz). Tarixçə eyni siyahıdadır. Yalnız virtual xaldır, real pula çevrilmir.
+
 ## 9a. Masa hədiyyələri (animasiyalı)
 - **Necə göndərilir:** masada oyunçunun şəklinə toxunun → "Hədiyyə göndər". Hər hədiyyənin qiyməti və alana keçəcək xal əvvəlcədən görünür. Hədiyyəni seçəndə təsdiq pəncərəsi açılır: nə qədər çıxılacaq, alan nə qədər alacaq, nə qədəri dövriyyədən çıxacaq və sizdə nə qədər qalacaq.
 - **Hədiyyələr (başlanğıc qiymətlər):** 🃏 Kart yağışı — 100 xal, 👑 Masa kralı — 300 xal, 🔥 Odlu Tuz — 1 000 xal. Admin qiyməti dəyişə, hədiyyəni aktiv və ya deaktiv edə bilər.
@@ -288,6 +306,15 @@ Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
 - **Tarixçə:** Profildə "Göndərdiyim hədiyyələr" və "Aldığım hədiyyələr" bölmələri var: qarşı tərəf, hədiyyə, tarix, qiymət, faiz və alınan xal. Admin panelində **Masa hədiyyələri** bölməsində göndərən və ya alan adına görə axtarmaq, ayarları dəyişmək olur. Hər əməliyyatın o anki qiyməti və faizi ayrıca saxlanılır — sonrakı dəyişikliklər köhnə qeydlərə təsir etmir.
 - **Statistika:** hədiyyə xalları "kimdən udmuşam / kimə uduzmuşam" statistikasına qarışmır.
 
+## 9c. v2.8 masa: xal, balans, onlayn status, çat, borc, səs
+- **Kart xalı:** öz kartlarınızın altındakı xal kartlara baxmamışdan əvvəl "? xal" görünür. Bütün kartlara küncdən baxanda və ya "Göstər" basanda xal açılır (server xalı yalnız bundan sonra göndərir). Raund bitəndə xal mövcud qaydaya görə görünür. Rəqiblərin kartı və xalı yalnız baxışmada / nəticədə açılır.
+- **Balans məxfiliyi:** hər kəs yalnız öz dəqiq balansını görür. Başqalarının balansı serverdən brauzerə ümumiyyətlə göndərilmir (CSS ilə gizlətmə deyil). Rəqib üçün yalnız bu raundda banka qoyduğu (🪙) görünür. Admin balansları öz panelində görür.
+- **Onlayn status:** avatarın küncündə yaşıl nöqtə — bağlantı var; qırmızı — bağlantı kəsilib və ya masadan çıxıb. Bağlantı bərpa olunanda yenidən yaşıl olur. Botlarda nöqtə yoxdur (BOT nişanı var).
+- **Çat tarixçəsi:** 💬 düyməsi çatı açır/bağlayır. Otağa qoşulduğunuz andan sonrakı mesajlar (son 100) otaqda qalır; çat bağlı ikən gələn mesajlar üçün qırmızı say görünür. Çat oyunu dayandırmır, yazı sahəsinin fokusu pozulmur. Tarixçəni yalnız otaq üzvləri görür; sonradan qoşulan köhnə söhbəti görmür. Mesajlar bazada saxlanılmır.
+- **Masadan borc:** rəqibin şəklinə toxunun → "🎁 Hədiyyə göndər", "💸 Borc istə", "🤝 Borc təklif et". Məbləğ və qaytarma müddəti seçilir. Qarşı tərəfə masada "🤝 borc təklifi cavabınızı gözləyir" zolağı çıxır — Qəbul/Rədd. Qəbula qədər heç nə dəyişmir; qəbulda hər iki balans serverdə bir tranzaksiyada yoxlanıb yazılır; əməliyyat borc verənin otaq növbəsində (oyun hərəkətləri ilə ardıcıl) icra olunur və gedən raundun balansı da dərhal yenilənir. Təkrar klik/itmiş cavab ikinci borc yaratmır. Masadan və raunddan çıxılmır.
+- **Səs:** ☰ menyuda "🔈 Səsi yoxla" qısa test səsi çalır (oyun səsləri söndürülübsə belə — yalnız yoxlama). Səs aç/söndür seçimi yadda qalır. iPhone-da səssiz rejim açarı WebAudio səsini bağlaya bilər.
+- **Mikrofonla danışıq əlavə edilməyib.** Səbəb: WebRTC səsli danışığı real telefonlarda və mobil şəbəkələrdə sınamaq imkanım olmadı. Mobil operator şəbəkələrində birbaşa bağlantı çox vaxt alınmır və **TURN serveri** lazımdır. Nümunə xərclər (2026-cı il, saytlarından): Cloudflare Realtime TURN — ayda 1000 GB pulsuz, sonra 0,05 $/GB; Metered — pulsuz plan 0,5 GB, sonra ayda 99 $-dan. Səs təxminən 30–40 kbit/s/axın olduğundan dostlar arasında Cloudflare-in pulsuz həddi adətən kifayət edər, amma hesab, API açarı (server mühit dəyişəni) və real cihaz sınağı tələb olunur. İstəsəniz, ayrıca paketdə əlavə edə bilərəm.
+
 ## 9b. iPhone-da yazı və klaviatura
 - Ekran artıq hər yenilənmədə bütövlükdə yenidən yaradılmır: kiçik "morph" funksiyası (`public/morph.js`) yalnız dəyişən hissələri yerində yeniləyir. Aktiv input və onun valideynləri DOM-dan çıxarılmır.
 - Yazılan mətn, kursor, seçim, fokus və davam edən yazı kompozisiyası (Azərbaycan hərfləri, telefonun söz təklifləri) qorunur. Fon yenilənmələri fokusu özü vermir — klaviatura öz-özünə açılmır. Klaviatura zamanı məcburi `scrollTo` yoxdur.
@@ -306,13 +333,25 @@ Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
 - **Server çöksə:** növbəti açılışda yarımçıq raund ləğv edilir və yalnız bazaya yazılmış qoyuluşlar geri qaytarılır.
 
 ## 11a. Render Free haqqında
-Render-in pulsuz planında server bir müddət istifadə olunmayanda "yatır". İlk açılış 30–60 saniyə və daha çox gecikə bilər. Bunu kodla tam həll etmək mümkün deyil. Ödənişli plan və ya xarici "oyadıcı" xidmət bu gecikməni azalda bilər.
+Render-in pulsuz planında server təxminən 15 dəqiqə heç kim daxil olmayanda "yatır". Növbəti ilk açılış 30–60 saniyə və daha çox gecikə bilər; yatma zamanı yaddaşdakı otaqlar silinir (yarımçıq raundlar açılışda ləğv edilib qoyulanlar qaytarılır). **Bunu kodla aradan qaldırmaq mümkün deyil** — kod "həmişə aktivdir" iddia etmir. Variantlar: ödənişli plan (yatmır) və ya xarici "oyadıcı" (Render-in şərtlərinə baxın). v2.8-də olanlar yalnız təsiri yumşaldır: aydın "yenidən qoşulur" statusu, avtomatik yenidən qoşulma, `/health` yoxlaması.
+
+## 11d. Donma ehtimalları və v2.8 düzəlişləri
+Kod və loglar yoxlanılıb; ehtimal olunan səbəblər və görülən iş:
+- **PostgreSQL bağlantısı (ən güclü ehtimal):** `pg` pool-da vaxt limiti yox idi — Neon cavab verməsə və ya bağlantı yarımçıq qalsa, sorğu sonsuz gözləyirdi və otağın bütün növbəsi (hərəkətlər, taymerlər, pul) "donurdu". İndi: bağlantı limiti 10 san, sorğu limiti 15 san, boş bağlantı 30 san. Limitdə sorğu xəta verir → otaq "Baza gözlənilir" rejiminə keçir və təkrar cəhd edir (paket ID-si və idempotency açarları sayəsində pul iki dəfə tutulmur).
+- **Pool 'error' hadisəsi:** Neon boş bağlantını bağlayanda pool `error` yayırdı, dinləyici olmadığı üçün Node prosesi **tamamilə dayana bilərdi**. İndi dinləyici var (yalnız loga yazır).
+- **Taymer növbəsinin şişməsi:** baza ləngiyəndə hər saniyə otaq növbəsinə yeni taymer işi əlavə olunurdu (yaddaş artımı, gecikmə). İndi əvvəlki iş bitməyincə yenisi əlavə edilmir. 10 saniyədən uzun çəkən növbə işi loga yazılır (`növbədəki iş N ms çəkdi`).
+- **Hər WebSocket "ping"-i bazaya müraciət edirdi:** indi ping bazasız cavablanır.
+- **Sürət limiti cədvəli** heç vaxt təmizlənmirdi (yaddaş artımı) — indi 5 dəqiqədən bir təmizlənir.
+- **Ölü bağlantılar:** server ping aralığı 30 → 15 san (kəsilmiş oyunçu ~30 san ərzində qırmızı görünür). Klient 20 saniyədən bir ping göndərir; 45 san cavab gəlməsə bağlantını yenidən qurur; şəbəkə qayıdanda / tətbiq ön plana gələndə dərhal yenidən qoşulur. Bağlantı kəsiləndə masada "📡 yenidən qoşulur…" zolağı görünür.
+- **Sağlamlıq yoxlaması:** `GET /health` → baza 3 saniyəyə cavab verirmi, işləmə müddəti, yaddaş, otaq/raund sayı, bazanı gözləyən və uzun məşğul otaqlar. Baza cavab verməsə 503. Şəxsi məlumat, parol, token və mühit dəyişənləri göndərilmir.
+- Gözlənilməyən xətalar loga yazılır; `uncaughtException`-da gözləyən paketləri yazmağa cəhd edib çıxır (Render yenidən başladır, yarımçıq raund açılışda ləğv edilib qaytarılır).
+- Raund vəziyyəti yalnız yaddaşdadır: server yenidən başlayanda (deploy, yatma, çökmə) gedən raund davam etmir — qoyulanlar qaytarılır. Bu, əvvəlki versiyalardakı kimidir.
 
 ## 11b. Telefonla yeniləmə: Codespaces → GitHub → Render
 1. ZIP-i telefonda yükləyin və açın (Fayllar tətbiqi ilə).
 2. GitHub-da repository-ni açın → **Add file → Upload files** → `seka` qovluğunun **içindəki** bütün fayl və qovluqları seçin → **Commit changes**. (Codespaces istifadə edirsinizsə: repository → **Code → Codespaces → Create codespace**, faylları sol paneldəki fayl ağacına sürükləyin, sonra **Source Control → Commit → Sync/Push**.)
 3. Render özü deploy edir. Etməsə: Render → servis → **Manual Deploy → Deploy latest commit**.
-4. Logda bu sətri görməlisiniz: `Migration 6 yoxlanıldı/tətbiq edildi`. Yeni mühit dəyişəni, yeni paket və ya Build/Start əmri dəyişikliyi yoxdur.
+4. Logda bu sətri görməlisiniz: `Migration 7 yoxlanıldı/tətbiq edildi` (v2.8: "Şir" hədiyyəsi). Render-də **Settings → Health Check Path** sahəsinə `/health` yazmaq tövsiyə olunur. Yeni mühit dəyişəni, yeni paket və ya Build/Start əmri dəyişikliyi yoxdur.
 5. Brauzerdə saytı açın: başlıqda **Dairə** görünməlidir. Admin ilə daxil olub "Admin → Ayarlar"da oyunçuları yaradın.
 
 ## 11c. Linkdəki "seka" hissəsini dəyişmək (istəyə görə)
@@ -332,4 +371,5 @@ Kod Render ünvanını dəyişmir. `xxx-seka.onrender.com` kimi ünvanı dəyiş
 - `server/store.js`, `server/db.js`: baza, migration-lar, tranzaksiyalar.
 - `server/app.js`: HTTP API və WebSocket.
 - `public/`: frontend modulları (`core`, `room`, `profile`, `admin`, `app`, DOM yeniləməsi `morph`, kartın küncündən baxma `peek`, bəzəklər `decor`, hədiyyə pəncərəsi `gifts`, hədiyyə animasiyaları `giftfx`), kartlar (`cards.js`), virtual əskinaslar (`notes.js`), animasiyalar (`fx.js`), səslər (`sound.js`) və xal (`score.js`).
+- Brauzer yoxlamaları (Playwright, istəyə görə): `tools/ui-layout.cjs` (13 ekran ölçüsü × 2–8 oyunçu, üst-üstə düşmə/ekrandan kənar/üfüqi sürüşmə), `tools/ui-v28.cjs` (xal, balans, onlayn status, çat, borc, Şir, yenidən qoşulma — özü test serveri başladır). Lokal test serveri: `tools/devserver.mjs` (yalnız yoxlama üçün, Render-də işə salmayın).
 - Testlər `test/` qovluğundadır. Hamısını işə salmaq üçün: `npm test`. PostgreSQL üzərində: `TEST_DATABASE_URL=postgres://... npm test` (`batch`, `finance`, `integration` və `money-integration` faylları).

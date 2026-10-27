@@ -89,7 +89,9 @@ test('demo: 1 insan + 5 bot, hər girişdə 10 000 demo xal, əsas balans/statis
   const room = await c.waitRoom((r) => r.demo && r.members.length === 6);
   assert.equal(room.members.filter((m) => m.isBot).length, 5);
   assert.equal(room.visibility, 'private');
-  assert.ok(room.members.every((m) => m.balance === 10000));
+  // öz demo balansım görünür, botların (başqalarının) balansı göndərilmir
+  assert.equal(room.members.find((m) => m.id === id).balance, 10000);
+  assert.ok(room.members.filter((m) => m.id !== id).every((m) => m.balance === null));
   c.send({ t: 'startRound' });
   await c.waitRoom((r) => r.round && r.practiceRound);
   for (let i = 0; i < 300; i++) {

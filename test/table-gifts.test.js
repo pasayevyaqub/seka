@@ -38,11 +38,12 @@ async function setup() {
   return { db, store, fin, user, bal, count, cleanup };
 }
 
-test('ilkin hədiyyələr və faiz: Kart yağışı 100, Masa kralı 300, Odlu Tuz 1000; alana 30%', async () => {
+test('ilkin hədiyyələr və faiz: Kart yağışı 100, Masa kralı 300, Odlu Tuz 1000, Şir 500; alana 30%', async () => {
   const t = await setup();
   const gifts = await t.fin.giftTypes();
   assert.deepEqual(gifts.map((g) => [g.id, g.name, g.price, g.active]), [
-    ['card_rain', 'Kart yağışı', 100, true], ['table_king', 'Masa kralı', 300, true], ['fire_ace', 'Odlu Tuz', 1000, true]]);
+    ['card_rain', 'Kart yağışı', 100, true], ['table_king', 'Masa kralı', 300, true], ['fire_ace', 'Odlu Tuz', 1000, true], ['lion', 'Şir', 500, true]]);
+  assert.ok(gifts.every((g) => g.sharePct === 30 && g.ownPct === null));
   assert.equal(await t.fin.giftSharePct(), 30);
   await t.cleanup();
 });
