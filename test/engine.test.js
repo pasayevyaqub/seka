@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { score3, handScore, isJackpot } from '../server/game/cards.js';
+import { score3, handScore, isJackpot, jackpotKind } from '../server/game/cards.js';
+import { score3 as clientScore3 } from '../public/score.js';
 import { Round, GameError, TIMING } from '../server/game/engine.js';
 
 // 'TS' -> {r:'T', s:'S'}, '10H' -> {r:'10', s:'H'}
@@ -193,7 +194,7 @@ test('kart atma vaxtı bitdi → 4-cü kart avtomatik atılır (ən yaxşı seç
   r.act(2, { type: 'discard', index: 0 }, 0);
   r.tick(TIMING.DISCARD_MS + 1);
   assert.equal(r.phase, 'betting');
-  // P1 əli: TS KS DS 6H → 6H atıldı (bu halda ən yaxşı da odur), amma qayda həmişə 4-cü kartdır
+  // qayda həmişə 4-cü kartdır (ən yaxşı seçim axtarılmır)
   assert.deepEqual(r.ps[1].discarded, c('6H'));
 });
 
@@ -220,14 +221,14 @@ test('kart atma zamanı oyunçu çıxsa oyun kilidlənmir', () => {
 });
 
 test('sekada cəkpot saxlanılan 3 karta əsaslanır', () => {
-  const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotAmount: 100 });
+  const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotSix: 100, jackpotAce: 100 });
   r.act(1, { type: 'offerSeka' }, 0);
   r.act(2, { type: 'offerAccept' }, 0);
   r.act(1, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 0 }, 0); // 6S atdı → 6H 6D TC — cəkpot deyil
   r.act(2, { type: 'discard', index: 3 }, 0);
   assert.equal(r.phase, 'betting');
-  const r2 = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotAmount: 100 });
+  const r2 = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotSix: 100, jackpotAce: 100 });
   r2.act(1, { type: 'offerSeka' }, 0);
   r2.act(2, { type: 'offerAccept' }, 0);
   r2.act(1, { type: 'sekaStart' }, 0);
@@ -276,9 +277,13 @@ test('vaxt bitdi → səsvermə ilə pas', () => {
   assert.equal(r.turn, 2);
 });
 
-test('mənfi balans limiti və maksimum xod', () => {
-  const r = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }, { debtLimit: 100 }, 0);
-  assert.throws(() => r.act(1, { type: 'xod', amount: 500 }, 0), /limit/);
+test('balans 0-dan aşağı düşmür; maksimum xod', () => {
+  const r = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }, {}, 100);
+  assert.throws(() => r.act(1, { type: 'xod', amount: 91 }, 0), /Balans/);
+  r.act(1, { type: 'xod', amount: 90 }, 0);
+  assert.equal(r.players.get(1).balance, 0);
+  // oyun haqqına çatmayan raunda qoşulmur
+  assert.throws(() => new Round({ players: [{ id: 1, name: 'a', balance: 5 }, { id: 2, name: 'b', balance: 100 }], settings: { ante: 10 }, now: 0 }), /oyun haqqına/);
   const r2 = mk(2, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D' } }, { maxBet: 50 });
   assert.throws(() => r2.act(1, { type: 'xod', amount: 60 }, 0), /Maksimum/);
 });
@@ -329,7 +334,7 @@ test('axınlar: seka daşınan bank, cəkpot, ləğv', () => {
   assert.deepEqual(r.result.winners, [2]);
   assert.deepEqual(flowsOf(r), { '1>2': 2000, '3>2': 1000 });
   // cəkpot
-  const j = mk(3, { 1: { 1: '6S 6H 6D', 2: 'TC KC 7D', 3: '9D 8D 6C' } }, { jackpotAmount: 100 });
+  const j = mk(3, { 1: { 1: '6S 6H 6D', 2: 'TC KC 7D', 3: '9D 8D 6C' } }, { jackpotSix: 100, jackpotAce: 100 });
   assert.deepEqual(flowsOf(j), { '2>1': 11000, '3>1': 11000 });
   // ləğv — axın yoxdur, pul qaytarılır
   const a = mk(3, { 1: { 1: 'TS KS 6H', 2: 'TC KC 7D', 3: '9D 8D 6C' } });
@@ -360,7 +365,7 @@ test('axınlar: tək qəpik də itmir (3-ə bölünməyən bank)', () => {
 test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', () => {
   for (let g = 0; g < 400; g++) {
     const n = 2 + (g % 7);
-    const r = new Round({ players: players(n), settings: { ante: 5, minBet: 5, jackpotAmount: 50 }, now: 0 });
+    const r = new Round({ players: players(n), settings: { ante: 5, minBet: 5, jackpotSix: 50, jackpotAce: 70 }, now: 0 });
     let guard = 0;
     const rnd = (k) => Math.floor(Math.random() * k);
     while (r.phase !== 'finished' && guard++ < 800) {
@@ -369,7 +374,9 @@ test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', 
         const opts = ['xod', 'xod', 'pas'];
         if (r.firstCircleDone()) opts.push('baxis', 'baxis');
         if (r.active().length === 2 && !r.offerUsed) opts.push('offerSeka', 'offerSplit');
-        const t = opts[rnd(opts.length)];
+        let t = opts[rnd(opts.length)];
+        if (r.isSecretHolder(id) && t === 'pas') t = Math.random() < 0.5 ? 'jackpotOpen' : 'xod';
+        if (r.secretAce && !r.secretAce.decided && Math.random() < 0.3) { r.act(r.secretAce.holder, { type: Math.random() < 0.5 ? 'jackpotHide' : 'jackpotOpen' }, 0); continue; }
         r.act(id, { type: t, amount: r.minXod() + (Math.random() < 0.3 ? 5 : 0), tieOffer: Math.random() < 0.5 }, 0);
       } else if (r.phase === 'offer') {
         r.act(r.pending.to, { type: Math.random() < 0.5 ? 'offerAccept' : 'offerDecline' }, 0);
@@ -397,4 +404,144 @@ test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', 
     for (const f of r.result.flows) { net[f.from] = (net[f.from] || 0) - f.cents; net[f.to] = (net[f.to] || 0) + f.cents; }
     for (const p of r.players.values()) assert.equal(net[p.id] || 0, (p.balance - 1000) * 100, `oyun ${g} oyunçu ${p.id}`);
   }
+});
+
+
+// ---------------- v2.2: 2 Tuz, ayrı cəkpotlar, gizli 3 Tuz ----------------
+test('2 Tuz = 22 xal; server və klient hesablaması eynidir', () => {
+  assert.equal(score3(h('TS TH 7D')), 22);
+  assert.equal(score3(h('TS TH KS')), 22);
+  assert.equal(score3(h('TS TH TD')), 33);
+  assert.equal(jackpotKind(h('TS TH TD')), 'ace');
+  assert.equal(jackpotKind(h('6S 6H 6D')), 'six');
+  assert.equal(jackpotKind(h('TS TH 6D')), null);
+  // bütün 3 kartlıq kombinasiyalarda server = klient
+  const deck = [];
+  for (const s2 of ['S', 'H', 'D', 'C']) for (const r of ['6', '7', '8', '9', '10', 'V', 'D', 'K', 'T']) deck.push({ r, s: s2 });
+  for (let i = 0; i < deck.length; i++) for (let j = i + 1; j < deck.length; j++) for (let k = j + 1; k < deck.length; k++) {
+    const c3 = [deck[i], deck[j], deck[k]];
+    assert.equal(clientScore3(c3), score3(c3));
+  }
+  // sekada atılan kart sayılmır
+  const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: 'TS TH 6H 6C', 2: '7H 8C 9D 10C' } });
+  r.act(1, { type: 'offerSeka' }, 0); r.act(2, { type: 'offerAccept' }, 0); r.act(1, { type: 'sekaStart' }, 0);
+  r.act(1, { type: 'discard', index: 0 }, 0); // TS atıldı → TH 6H 6C = 12 (♥ 11+6=17)
+  assert.equal(handScore(r.ps[1].cards), 17);
+});
+
+test('3 dənə 6: dərhal açılır, hər rəqibdən min(məbləğ, balans) tutulur, mənfi yox', () => {
+  const r = new Round({
+    players: [{ id: 1, name: 'A', balance: 1000 }, { id: 2, name: 'B', balance: 50 }, { id: 3, name: 'C', balance: 1000 }],
+    settings: { ante: 10, jackpotSix: 100, jackpotAce: 500 }, now: 0,
+    dealer: dealer({ 1: { 1: '6S 6H 6D', 2: 'TC KC 7D', 3: '9D 8D 6C' } }),
+  });
+  assert.equal(r.result.how, 'jackpot');
+  const jp = r.result.jackpots[0];
+  assert.equal(jp.kind, 'six');
+  assert.deepEqual(jp.payments.map((p) => [p.from, p.declared, p.paid]), [[2, 100, 40], [3, 100, 100]]);
+  assert.equal(r.players.get(2).balance, 0);
+  assert.equal(r.players.get(1).balance, 1000 - 10 + 30 + 140);
+  assert.equal(total(r), 2050);
+});
+
+test('gizli 3 Tuz: rəqiblərə heç nə görünmür, sahib pas edə bilmir, sonda açılır', () => {
+  const r = mk(3, { 1: { 1: '7S 8C 9D', 2: 'TC TH TD', 3: '9H 8H 6C' } }, { jackpotAce: 200 });
+  const before = JSON.stringify(r.viewFor(1, 0));
+  assert.equal(r.viewFor(2, 0).me.secretJackpot.kind, 'ace');
+  for (const v of [1, 3, 99]) {
+    const js = JSON.stringify(r.viewFor(v, 0));
+    assert.ok(!/"secretJackpot":\{/.test(js));
+    assert.ok(!/Tuz|cəkpot|CƏKPOT/i.test(JSON.stringify(r.viewFor(v, 0).log)));
+    assert.equal(r.viewFor(v, 0).players.find((p) => p.id === 2).cards, null);
+  }
+  r.act(2, { type: 'jackpotHide' }, 0);
+  assert.equal(JSON.stringify(r.viewFor(1, 0)), before, 'gizli seçim başqalarının görünüşünü dəyişməməlidir');
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  assert.throws(() => r.act(2, { type: 'pas' }, 0), /pas edə bilməz/);
+  assert.equal(r.viewFor(2, 0).me.canPas, false);
+  r.act(2, { type: 'xod', amount: 10 }, 0);
+  r.act(3, { type: 'pas' }, 0);
+  r.act(1, { type: 'pas' }, 0); // yalnız sahib qalır → raund bağlanmazdan əvvəl cəkpot açılır
+  assert.equal(r.result.how, 'jackpot');
+  assert.deepEqual(r.result.winners, [2]);
+  assert.deepEqual(r.result.jackpots[0].payments.map((p) => p.paid), [200, 200]);
+  assert.ok(r.result.shown.some((x) => x.id === 2 && x.score === 33));
+  assert.equal(total(r), 3000);
+  // cəkpot və bank ayrı qeydlərdir, hər biri bir dəfə
+  const kinds = r.effects.filter((e) => e.userId === 2 && e.delta > 0).map((e) => e.reason).sort();
+  assert.deepEqual(kinds, ['Bank udu', 'Cəkpot (3 Tuz)', 'Cəkpot (3 Tuz)']);
+});
+
+test('gizli 3 Tuz: səsvermə pas etmir, vaxt bitəndə, baxışmada, çıxanda və bölmədə açılır', () => {
+  const H = { 1: { 1: '7S 8C 9D', 2: 'TC TH TD', 3: '9H 8H 6C' } };
+  // səsvermə
+  let r = mk(3, H, { jackpotAce: 50, turnSeconds: 60 });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(1, { type: 'votePas' }, 61_000); // 3 aktivdən 1 səs kifayətdir
+  assert.equal(r.ps[2].status, 'active');
+  assert.equal(r.result.how, 'jackpot');
+  // vaxt bitdi (tick)
+  r = mk(3, H, { jackpotAce: 50, turnSeconds: 60 });
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.tick(61_000);
+  assert.equal(r.result.how, 'jackpot');
+  // baxışma (gizli kart üzə çıxmazdan əvvəl açılır)
+  r = mk(3, H, { jackpotAce: 50 });
+  [1, 2, 3].forEach((id) => r.act(id, { type: 'xod', amount: 10 }, 0));
+  r.act(1, { type: 'xod', amount: 10 }, 0);
+  r.act(2, { type: 'baxis' }, 0);
+  assert.equal(r.result.how, 'jackpot');
+  // sahib otaqdan çıxır — cəkpot ləğv olunmur
+  r = mk(3, H, { jackpotAce: 50 });
+  r.removePlayer(2, 0);
+  assert.equal(r.result.how, 'jackpot');
+  assert.equal(r.result.jackpots[0].total, 100);
+  // 2 nəfər: bölmə təklifi qəbul → əvvəl cəkpot açılır, bank sahibə
+  r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC TH TD' } }, { jackpotAce: 50 });
+  r.act(1, { type: 'offerSplit' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0);
+  assert.equal(r.result.how, 'jackpot');
+  assert.equal(r.result.payouts[2], 20);
+});
+
+test('gizli 3 Tuz: sahibin xoda balansı çatmırsa cəkpot avtomatik açılır', () => {
+  const r = new Round({
+    players: [{ id: 1, name: 'A', balance: 1000 }, { id: 2, name: 'B', balance: 15 }],
+    settings: { ante: 10, minBet: 10, jackpotAce: 30 }, now: 0,
+    dealer: dealer({ 1: { 1: '7S 8C 9D', 2: 'TC TH TD' } }),
+  });
+  r.act(1, { type: 'xod', amount: 10 }, 0); // B-nin növbəsi: balans 5 < 10
+  assert.equal(r.result.how, 'jackpot');
+  assert.equal(r.players.get(2).balance, 5 + 30 + 30); // qalıq + bank (10+10+10) + cəkpot
+});
+
+test('eyni əldə 3 dənə 6 və 3 Tuz: hər ikisi oturma sırası ilə açılır, sahiblər bir-birinə ödəmir', () => {
+  const r = mk(3, { 1: { 1: 'TS TH TD', 2: '6S 6H 6D', 3: '9H 8H 7C' } }, { jackpotSix: 100, jackpotAce: 300 });
+  assert.equal(r.result.how, 'jackpot');
+  assert.deepEqual(r.result.jackpots.map((j) => [j.holder, j.kind, j.total]), [[1, 'ace', 300], [2, 'six', 100]]);
+  assert.equal(r.result.payouts[1] + r.result.payouts[2], 30);
+  assert.equal(total(r), 3000);
+});
+
+// ---------------- v2.2 dizayn: masada göstərilən açıq məlumat ----------------
+test('view: "put" (banka qoyulan) açıqdır, rəqib kartları isə gizli qalır; kart etiketləri J/Q/K/A', async () => {
+  const { cardLabel } = await import('../server/game/cards.js');
+  const r = mk(3, { 1: { 1: '7S 8S 9H', 2: 'DS KS 6H', 3: '6C 7C 8D' } });
+  r.start(0);
+  const v1 = r.viewFor(1, 0);
+  for (const p of v1.players) assert.ok(p.put >= 10);
+  assert.equal(v1.players.reduce((a, p) => a + p.put, 0), v1.pot);
+  assert.equal(v1.players.find((p) => p.id === 2).cards, null);
+  assert.equal(v1.players.find((p) => p.id === 3).cards, null);
+  const turn = r.turn;
+  const before = v1.players.find((p) => p.id === turn).put;
+  r.act(turn, { type: 'xod', amount: r.minXod() }, 0);
+  const v2 = r.viewFor(1, 0);
+  assert.equal(v2.players.find((p) => p.id === turn).put, before + v1.minXod);
+  assert.equal(v2.players.reduce((a, p) => a + p.put, 0), v2.pot);
+  assert.ok(!JSON.stringify(r.viewFor(2, 0)).includes('"r":"7","s":"S"'), 'P1-in kartı P2-yə getməməlidir');
+  assert.equal(cardLabel(c('TS')), 'A♠');
+  assert.equal(cardLabel(c('VH')), 'J♥');
+  assert.equal(cardLabel(c('DD')), 'Q♦');
+  assert.equal(cardLabel(c('10C')), '10♣');
 });

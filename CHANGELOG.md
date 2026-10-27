@@ -1,4 +1,52 @@
+# Oyun xalı vahidi
+
+- İnterfeys, bildirişlər və oyun mesajlarında balans vahidi “oyun xalı” oldu.
+- Əskinas təsvirlərində valyuta işarəsi ulduzla, vahid “OYUN XALI” ilə əvəzləndi.
+- Balans rəqəmləri, oyun qaydaları və verilənlər bazasının quruluşu dəyişdirilmədi.
+
 # Dəyişikliklər
+
+## v2.2.0 — maliyyə, sosial funksiyalar və yeni masa dizaynı
+
+### Əsas yeniliklər
+- **Qeydiyyat təsdiqsizdir** + bir dəfəlik qeydiyyat bonusu (standart 100 virtual oyun xalı, admin dəyişə bilər, yalnız gələcək qeydiyyatlara aiddir). Köhnə "gözləyən" hesablar aktiv olur, bonus almır.
+- **Yeni mənfi balans yaranmır**: oyun, borc ödənişi, hədiyyə və admin çıxılması serverdə yoxlanılır. Köhnə mənfi balanslar silinmir, admin açıq şəkildə düzəldir.
+- **Admin krediti** (təsdiqlə, limitlə, faizsiz, "Borcu ödə"), **oyunçular arası hədiyyə**, **müddətli borc** (qəbuldan sonra köçürmə, vaxtında avtomatik tutulma, qismən ödəniş, "Gecikib" statusu, ardıcıllıq: ən köhnə müddət, sonra kiçik ID).
+- **Profil səhifəsi**, **admin panelində axtarış və bölmələr** (istifadəçilər, kredit, borclar, hədiyyələr), **bildirişlər**.
+- **Demo**: 1 insan + 1–7 bot, hər girişdə 10 000 demo oyun xalı; əsas balansa təsir etmir.
+- **Profil şəkli** (JPG/PNG/WebP ≤ 2 MB; serverdə yoxlanılır, kiçildilir, metadata silinir, bazada saxlanılır).
+- **Emoji və çat** — oyunçunun avatarı üzərində 3 saniyəlik balon.
+- **Xal**: saxlanılan 3 kartda 2 Tuz = 22. **Cəkpotlar**: 3×6 və 3 Tuz üçün ayrı məbləğ; 3 Tuz sahibi gizli seçim edir (aç / gizli saxla).
+
+### Masa dizaynı (bu versiyanın son hissəsi)
+- Oval yaşıl keçə, taxta/dəri kənar, qızılı detallar — CSS/SVG komponentləri; fon şəkli və görünməz düymə yoxdur.
+- 2–8 oyunçu üçün oturacaq düzülüşü; avatar ətrafında vaxt halqası və saniyə sayğacı; ad, balans və banka qoyulan məbləğ.
+- Bankda virtual əskinas yığını və dəqiq məbləğ. Əskinaslar orijinal çəkilib, üzərində "VİRTUAL" yazılıb.
+- Böyük Pas / Baxış / Xod düymələri; Seka və bölmə təklifləri yalnız icazə olanda aktivdir; gizli 3 Tuz sahibində Pas kilidlidir.
+- Klassik kartlar: J/Q/K/A indeksləri, iki başlı rəngli saray fiqurları, böyük suitli Tuz, klassik pip düzülüşü (server jurnalında da J/Q/K/A).
+- Animasiyalar: paylama, kartın çevrilməsi, pulun banka və qalibə uçuşu. Yalnız serverin təsdiqlədiyi vəziyyətdən yaranır, yenidən çəkilmədə baştan başlamır.
+- WebAudio səsləri (paylama, pul, qələbə, növbə), 🔊/🔇 düyməsi; səs ilk toxunuşdan sonra açılır.
+- Telefon şaquli/üfüqi, planşet və kompüter görünüşü; iPhone safe area və klaviatura dəstəyi.
+- Server görünüşünə yalnız hamıya açıq olan `put` (oyunçunun banka qoyduğu cəmi) əlavə olundu. Oyun qaydaları, balans hesablamaları və baza dəyişmədi.
+
+### Baza
+- **Migration 4** (avtomatik): `users.credit_debt`, `credit_limit`, `avatar`, `avatar_ver`; `transactions.counterparty_id`, `op_key`, `note`; yeni cədvəllər `op_keys`, `app_settings`, `credit_requests`, `loans`, `loan_payments`, `notifications`. Mövcud hesablar, şifrələr, balanslar və tarixçə qorunur. (Otaq ayarları bazada saxlanılmır; köhnə klient tək `jackpotAmount` göndərsə, server onu hər iki cəkpota tətbiq edir.)
+- Yeni mühit dəyişəni yoxdur. Yeni asılılıq: `sharp` (profil şəkli).
+
+### Dəyişən fayllar
+| Fayl | Dəyişiklik |
+|---|---|
+| `server/finance.js`, `server/debts.js` | **Yeni**: bonus, kredit, hədiyyə, borc, avtomatik tutulma, idempotency |
+| `server/db.js`, `server/store.js` | Migration 4, təsdiqsiz qeydiyyat, şərtli (mənfiyə düşməyən) yazılışlar, avatar |
+| `server/app.js`, `server/rooms.js` | Yeni API-lər, demo/bot sayı, emoji/çat, oyunla sinxron pul növbəsi |
+| `server/game/engine.js`, `cards.js`, `bot.js` | 2 Tuz = 22, iki cəkpot, gizli 3 Tuz, `put`, J/Q/K/A etiketləri |
+| `public/room.js` | Masa yenidən quruldu |
+| `public/fx.js`, `public/sound.js`, `public/notes.js` | **Yeni**: animasiya, səs, virtual əskinaslar |
+| `public/cards.js`, `public/index.html` | Klassik kart dəsti, J/Q/K/A, animasiya qatı |
+| `public/core.js`, `profile.js`, `admin.js`, `app.js`, `style.css` | Modullara bölünmüş frontend, profil, admin, yeni dizayn |
+| `test/finance.test.js`, `test/money-integration.test.js` | **Yeni** testlər |
+| `test/engine.test.js`, `integration.test.js`, `batch.test.js` | v2.2 qaydaları və migration üçün yeniləndi |
+| `README.md`, `VISUALS.md` | Təlimat; vizual materialların mənbəyi və lisenziyası |
 
 ## v2.1.0 — balans yazılışının etibarlılığı
 
@@ -37,7 +85,7 @@
 | `server/db.js` | Migration sistemi (`schema_migrations`), `db.tx()` atomik tranzaksiyalar (PostgreSQL və SQLite), yeni cədvəllər `rounds`, `round_flows`, `transactions` cədvəlinə yeni sütunlar `kind`, `prev_balance`, `round_uid` |
 | `server/app.js` | **Yeni** (köhnə `index.js`-in yerinə): yeni API-lər `/api/rooms`, `/api/my-stats`, `/api/admin/stats`, `/api/admin/users/:id/reset-negative`; demo istifadəçi üçün məhdudiyyətlər; testlər üçün `createApp()` |
 | `server/index.js` | Yalnız serveri işə salır |
-| `public/app.js` | AZN göstərilməsi, otaq siyahısı, ad/görünmə/şifrə formu, "Kompüterlə oyna", demo lobbisi, kart atma interfeysi, təklif düymələri və cavablar, Baxış izahı, nəticə bölməsi (kartlar və xallar), tam ekran və alternativi, "Nəticələrim", admin "Nəticələr" və "Mənfi balansı sıfırla" |
+| `public/app.js` | oyun xalı göstərilməsi, otaq siyahısı, ad/görünmə/şifrə formu, "Kompüterlə oyna", demo lobbisi, kart atma interfeysi, təklif düymələri və cavablar, Baxış izahı, nəticə bölməsi (kartlar və xallar), tam ekran və alternativi, "Nəticələrim", admin "Nəticələr" və "Mənfi balansı sıfırla" |
 | `public/style.css` | Yeni komponentlərin stilləri, kompakt mobil görünüş, tam ekran alternativi |
 | `public/index.html` | Tam ekran üçün manifest və iPhone meta-teqləri |
 | `public/score.js`, `public/manifest.webmanifest`, `public/icon.svg` | **Yeni**: klientdə xal göstərişi, ana ekrana əlavə etmək üçün manifest və ikon |

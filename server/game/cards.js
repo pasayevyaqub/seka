@@ -32,8 +32,10 @@ export function score3(cards) {
   if (cards.length !== 3) throw new Error('score3 needs 3 cards');
   const [a, b, c] = cards;
   if (a.r === b.r && b.r === c.r) {
-    return cardValue(a.r) * 3; // 7-7-7 = 21, D-D-D = 30
+    return cardValue(a.r) * 3; // 7-7-7 = 21, D-D-D = 30, T-T-T = 33 (cəkpot)
   }
+  // 2 Tuz həmişə 22 xaldır (eyni suitli ən yaxşı kombinasiya ən çox 21 ola bilər)
+  if (cards.filter((k) => k.r === 'T').length === 2) return 22;
   const bySuit = {};
   for (const k of cards) bySuit[k.s] = (bySuit[k.s] || 0) + cardValue(k.r);
   return Math.max(...Object.values(bySuit));
@@ -62,13 +64,18 @@ export function bestThree(cards) {
   return best;
 }
 
-// Cəkpot: 3 dənə 6 və ya 3 dənə Tuz
-export function isJackpot(cards) {
+// Cəkpot növü (saxlanılan 3 karta görə): 'six' = 3 dənə 6, 'ace' = 3 dənə Tuz, yoxdursa null
+export function jackpotKind(cards) {
   const count = (r) => cards.filter((c) => c.r === r).length;
-  return count('6') >= 3 || count('T') >= 3;
+  if (count('6') >= 3) return 'six';
+  if (count('T') >= 3) return 'ace';
+  return null;
 }
+export function isJackpot(cards) { return jackpotKind(cards) !== null; }
 
+export const RANK_LABEL = { V: 'J', D: 'Q', K: 'K', T: 'A' };
 export function cardLabel(c) {
   const suit = { S: '♠', H: '♥', D: '♦', C: '♣' }[c.s];
-  return `${c.r}${suit}`;
+  // ekranda klassik indekslər: Valet=J, Dama=Q, Karol=K, Tuz=A (daxili kodlar dəyişmir)
+  return `${RANK_LABEL[c.r] || c.r}${suit}`;
 }

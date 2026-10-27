@@ -43,15 +43,15 @@ async function login(username, password = '123456') {
 let adminCookie;
 async function admin() { if (!adminCookie) adminCookie = await login('admin', 'admin123'); return adminCookie; }
 
-async function makeUser(username, { approve = true, balance = 0 } = {}) {
+async function makeUser(username, { balance = 0 } = {}) {
   const r = await http('/api/register', { body: { username, displayName: username[0].toUpperCase() + username.slice(1), password: '123456' } });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  const users = (await http('/api/admin/users', { cookie: await admin() })).data.users;
-  const u = users.find((x) => x.username === username);
-  if (approve) await http(`/api/admin/users/${u.id}/status`, { body: { status: 'approved' }, cookie: await admin() });
-  if (balance) await http(`/api/admin/users/${u.id}/balance`, { body: { amount: balance }, cookie: await admin() });
-  return u.id;
+  const u = await app.db.get('SELECT id FROM users WHERE username = $1', [username]);
+  // test hazırlığı: balansı birbaşa təyin edirik (qeydiyyat bonusu ayrıca testdə yoxlanılır)
+  await app.db.run('UPDATE users SET balance = $1 WHERE id = $2', [balance, u.id]);
+  return Number(u.id);
 }
+const key = () => `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
 
 class Client {
   constructor(cookie) {
@@ -81,45 +81,41 @@ const dbGet = (sql, p) => app.db.get(sql, p);
 const dbAll = (sql, p) => app.db.all(sql, p);
 
 // ---------------------------------------------------------------
-test('demo: təsdiqlənməmiş istifadəçi daxil olur, yalnız botla məşq edir, real balans dəyişmir', async () => {
-  const id = await makeUser('demo1', { approve: false });
-  const cookie = await login('demo1');
-  assert.equal((await http('/api/rooms', { cookie })).status, 403);
-  assert.equal((await http('/api/my-stats', { cookie })).status, 403);
-  const c = new Client(cookie); await c.ready;
-  const hello = await c.waitFor((m) => m.t === 'hello');
-  assert.equal(hello.user.status, 'pending');
-  c.send({ t: 'joinRoom', code: 'ABCDE' });
-  assert.match((await c.error()).msg, /təsdiqlənməyib/);
-  c.send({ t: 'createRoom', name: 'Demom', visibility: 'public', password: 'abc', withBot: false });
-  const room = await c.waitRoom((r) => r.members.length === 2);
-  assert.equal(room.demo, true);
+test('demo: 1 insan + 5 bot, hər girişdə 10 000 demo oyun xalı, əsas balans/statistika dəyişmir', async () => {
+  const id = await makeUser('demo1', { balance: 0 });
+  const c = await client('demo1');
+  c.send({ t: 'createRoom', demo: true, bots: 5, name: 'Demo' });
+  const room = await c.waitRoom((r) => r.demo && r.members.length === 6);
+  assert.equal(room.members.filter((m) => m.isBot).length, 5);
   assert.equal(room.visibility, 'private');
-  assert.equal(room.hasPassword, false);
-  assert.ok(room.members.some((m) => m.isBot && m.name.startsWith('Bot')));
+  assert.ok(room.members.every((m) => m.balance === 10000));
   c.send({ t: 'startRound' });
   await c.waitRoom((r) => r.round && r.practiceRound);
-  // botlar oynayır; insan növbəsi gələndə pas deyirik — raund bitməlidir
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 300; i++) {
     const r = c.room.round;
     if (r.phase === 'finished') break;
-    if (r.phase === 'betting' && r.me?.isTurn) c.send({ t: 'act', action: { type: 'pas', v: r.version } });
+    if (r.phase === 'betting' && r.me?.isTurn) c.send({ t: 'act', action: { type: r.me.canPas ? 'pas' : 'jackpotOpen', v: r.version } });
     if (r.phase === 'discard' && r.me?.mustDiscard) c.send({ t: 'act', action: { type: 'discard', index: 0, v: r.version } });
     if (r.phase === 'offer' && r.pending.to === id) c.send({ t: 'act', action: { type: 'offerDecline', v: r.version } });
     if (r.phase === 'tieDecision' && !r.pending.voted.includes(id)) c.send({ t: 'act', action: { type: 'tieVote', choice: 'bol', v: r.version } });
     await sleep(30);
   }
   assert.equal(c.room.round.phase, 'finished');
-  const u = await dbGet('SELECT balance FROM users WHERE id = $1', [id]);
-  assert.equal(Number(u.balance), 0);
-  assert.equal((await dbGet('SELECT COUNT(*) AS n FROM transactions WHERE user_id = $1', [id])).n, 0);
-  // təsdiq → klientə "user" mesajı gəlir
-  await http(`/api/admin/users/${id}/status`, { body: { status: 'approved' }, cookie: await admin() });
-  const upd = await c.waitFor((m) => m.t === 'user');
-  assert.equal(upd.user.status, 'approved');
+  assert.ok(c.room.members.find((m) => m.id === id).balance < 10000);
+  assert.equal(Number((await dbGet('SELECT balance FROM users WHERE id = $1', [id])).balance), 0);
+  assert.equal(Number((await dbGet('SELECT COUNT(*) AS n FROM transactions WHERE user_id = $1 AND kind <> \'bonus\'', [id])).n), 0);
+  // çıxıb yenidən girəndə demo balans yenə 10 000
   c.send({ t: 'leaveRoom' });
   await c.waitFor((m) => m.t === 'left');
-  c.close();
+  c.clear();
+  c.send({ t: 'createRoom', demo: true, bots: 7 });
+  const again = await c.waitRoom((r) => r.demo && r.members.length === 8);
+  assert.equal(again.members.find((m) => m.id === id).balance, 10000);
+  // demo otağına başqası qoşula bilməz, 8-dən çox yer yoxdur
+  c.clear(); c.send({ t: 'addBot' });
+  assert.match((await c.error()).msg, /Boş yer yoxdur/);
+  c.send({ t: 'leaveRoom' }); c.close();
+  await sleep(50);
 });
 
 test('otaqlar: açıq/gizli, şifrə heç vaxt göndərilmir, səhv şifrə limiti', async () => {
@@ -216,7 +212,8 @@ test('real oyun: köhnə klik rədd, "yox" rədd, atomik yazılış, qarşılıq
 
 test('mənfi balansı sıfırla: yalnız admin, təsdiq, paralel sorğu, tarixçə qalır', async () => {
   const id = await makeUser('borclu');
-  await http(`/api/admin/users/${id}/balance`, { body: { amount: -250 }, cookie: await admin() });
+  // köhnə versiyadan qalmış mənfi balans (yeni əməliyyatlar mənfi yarada bilmir)
+  await app.db.run('UPDATE users SET balance = -250 WHERE id = $1', [id]);
   // moderator icra edə bilməz
   const mod = await makeUser('modx');
   await http(`/api/admin/users/${mod}/role`, { body: { role: 'moderator' }, cookie: await admin() });
@@ -241,19 +238,23 @@ test('mənfi balansı sıfırla: yalnız admin, təsdiq, paralel sorğu, tarixç
   assert.ok(tx[1].by_user);
 });
 
-test('mənfi balans davam edən real raundda sıfırlanmır', async () => {
-  const a = await makeUser('neg_a'); const b = await makeUser('neg_b');
-  await http(`/api/admin/users/${a}/balance`, { body: { amount: -50 }, cookie: await admin() });
-  const A = await client('neg_a'); const B = await client('neg_b');
-  A.send({ t: 'createRoom', name: 'Neg', visibility: 'private' });
-  const room = await A.waitRoom((r) => r.name === 'Neg');
-  B.send({ t: 'joinRoom', code: room.code });
-  await A.waitRoom((r) => r.members.length === 2);
-  A.send({ t: 'startRound' });
-  await A.waitRoom((r) => r.round?.phase === 'betting');
+test('mənfi (köhnə) balanslı və balansı çatmayan oyunçu real raunda daxil edilmir', async () => {
+  const a = await makeUser('neg_a'); await makeUser('neg_b', { balance: 100 }); await makeUser('neg_c', { balance: 100 });
+  await app.db.run('UPDATE users SET balance = -50 WHERE id = $1', [a]);
+  const A = await client('neg_a'); const B = await client('neg_b'); const C = await client('neg_c');
+  B.send({ t: 'createRoom', name: 'Neg', visibility: 'private' });
+  const room = await B.waitRoom((r) => r.name === 'Neg');
+  A.send({ t: 'joinRoom', code: room.code }); C.send({ t: 'joinRoom', code: room.code });
+  await B.waitRoom((r) => r.members.length === 3);
+  B.send({ t: 'startRound' });
+  const st = await B.waitRoom((r) => r.round?.phase === 'betting');
+  assert.ok(!st.round.players.some((p) => p.id === a && p.inHand));
+  assert.ok(st.round.log.some((l) => /balans oyun haqqına/.test(l.msg)));
+  assert.equal(Number((await dbGet('SELECT balance FROM users WHERE id = $1', [a])).balance), -50);
+  // raundda olmadığı üçün admin sıfırlaya bilər
   const res = await http(`/api/admin/users/${a}/reset-negative`, { body: { confirm: true }, cookie: await admin() });
-  assert.match(res.data.error, /raunddadır/);
-  for (const c of [A, B]) { c.send({ t: 'leaveRoom' }); c.close(); }
+  assert.equal(res.status, 200);
+  for (const c of [A, B, C]) { c.send({ t: 'leaveRoom' }); c.close(); }
   await sleep(100);
 });
 

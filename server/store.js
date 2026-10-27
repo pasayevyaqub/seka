@@ -22,7 +22,11 @@ export function checkPassword(pw, stored) {
 export const publicUser = (u) => u && ({
   id: u.id, username: u.username, displayName: u.display_name, phone: u.phone,
   role: u.role, status: u.status, balance: Number(u.balance), createdAt: Number(u.created_at),
+  creditDebt: Number(u.credit_debt || 0), creditLimit: Number(u.credit_limit || 0), avatarVer: Number(u.avatar_ver || 0),
 });
+
+// şəkil (avatar) binar məlumatı hər sorğuda daşınmasın deyə sütunlar açıq yazılır
+const USER_COLS = 'id, username, display_name, display_key, phone, pass_hash, role, status, balance, created_at, credit_debt, credit_limit, avatar_ver';
 
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
 
@@ -40,7 +44,8 @@ export class Store {
     console.log(`Admin hesabı yaradıldı: istifadəçi adı "${username}". Şifrəni dərhal dəyişin!`);
   }
 
-  async register({ username, displayName, password, phone }) {
+  /** Qeydiyyat: hesab dərhal aktivdir; başlanğıc bonusu eyni tranzaksiyada, bir dəfə verilir. */
+  async register({ username, displayName, password, phone }, finance = null) {
     username = String(username || '').trim().toLowerCase();
     displayName = String(displayName || '').trim().replace(/\s+/g, ' ');
     phone = String(phone || '').trim().slice(0, 30) || null;
@@ -50,15 +55,22 @@ export class Store {
     if (String(password || '').length < 6) throw new UserError('Şifrə ən azı 6 simvol olmalıdır.');
     if (await this.db.get('SELECT id FROM users WHERE username = $1', [username])) throw new UserError('Bu istifadəçi adı artıq mövcuddur.');
     if (await this.db.get('SELECT id FROM users WHERE display_key = $1', [displayName.toLowerCase()])) throw new UserError('Bu ad artıq istifadə olunur.');
-    await this.db.run(
-      `INSERT INTO users(username, display_name, display_key, phone, pass_hash, created_at) VALUES($1, $2, $3, $4, $5, $6)`,
-      [username, displayName, displayName.toLowerCase(), phone, hashPassword(password), now()],
-    );
+    const hash = hashPassword(password);
+    const bonus = finance ? await finance.signupBonus() : 0;
+    return this.db.tx(async (q) => {
+      const row = await q.get(
+        `INSERT INTO users(username, display_name, display_key, phone, pass_hash, status, created_at) VALUES($1, $2, $3, $4, $5, 'approved', $6) RETURNING id`,
+        [username, displayName, displayName.toLowerCase(), phone, hash, now()],
+      );
+      const id = Number(row.id);
+      const given = finance ? await finance.grantSignupBonus(q, id, bonus) : 0;
+      return { id, bonus: given };
+    });
   }
 
   // Təsdiq gözləyən istifadəçi də daxil olur — amma yalnız demo (botlarla məşq) rejimində
   async login(username, password) {
-    const u = await this.db.get('SELECT * FROM users WHERE username = $1', [String(username || '').trim().toLowerCase()]);
+    const u = await this.db.get(`SELECT ${USER_COLS} FROM users WHERE username = $1`, [String(username || '').trim().toLowerCase()]);
     if (!u || !checkPassword(String(password || ''), u.pass_hash)) throw new UserError('İstifadəçi adı və ya şifrə yanlışdır.');
     if (u.status === 'rejected') throw new UserError('Qeydiyyatınız rədd edilib.');
     if (u.status === 'blocked') throw new UserError('Hesabınız bloklanıb.');
@@ -79,9 +91,26 @@ export class Store {
     return u;
   }
 
-  getUser(id) { return this.db.get('SELECT * FROM users WHERE id = $1', [id]); }
+  getUser(id) { return this.db.get(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [id]); }
 
-  listUsers() { return this.db.all(`SELECT * FROM users ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id DESC`); }
+  listUsers() { return this.db.all(`SELECT ${USER_COLS} FROM users ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id DESC`); }
+
+  // ---- profil şəkli (DB-də saxlanılır: Render-in müvəqqəti diski istifadə olunmur) ----
+  async setAvatar(id, buf) {
+    const row = await this.db.get('UPDATE users SET avatar = $1, avatar_ver = avatar_ver + 1 WHERE id = $2 RETURNING avatar_ver', [buf, id]);
+    return Number(row.avatar_ver);
+  }
+  async deleteAvatar(id) {
+    const row = await this.db.get('UPDATE users SET avatar = NULL, avatar_ver = avatar_ver + 1 WHERE id = $1 RETURNING avatar_ver', [id]);
+    return Number(row.avatar_ver);
+  }
+  async getAvatar(id) {
+    const r = await this.db.get('SELECT avatar FROM users WHERE id = $1', [id]);
+    let a = r?.avatar;
+    if (!a) return null;
+    if (typeof a === 'string' && a.startsWith('\\x')) a = Buffer.from(a.slice(2), 'hex'); // bəzi PG klientləri
+    return Buffer.from(a);
+  }
 
   async setStatus(id, status) {
     if (!['approved', 'rejected', 'blocked'].includes(status)) throw new UserError('Yanlış status.');
@@ -142,7 +171,7 @@ export class Store {
       await q.run(
         `INSERT INTO transactions(user_id, delta, balance_after, prev_balance, reason, by_user, kind, created_at)
          VALUES($1, $2, 0, $3, $4, $5, 'reset', $6)`,
-        [userId, -prev, prev, `Mənfi balans sıfırlandı (əvvəlki: ${prev} AZN)`, adminId, now()],
+        [userId, -prev, prev, `Mənfi balans sıfırlandı (əvvəlki: ${prev} oyun xalı)`, adminId, now()],
       );
       return { prev, delta: -prev, balance: 0 };
     });
@@ -188,8 +217,15 @@ export class Store {
       }
       const kind = end?.status === 'aborted' ? 'refund' : 'game';
       for (const e of effects) {
-        const row = await q.get('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [e.delta, e.userId]);
-        if (!row) continue; // istifadəçi silinibsə
+        // mənfi dəyişiklik balansı 0-dan aşağı sala bilməz (mühərrik bunu onsuz da yoxlayır — bu, ikinci qorumadır)
+        const row = e.delta < 0
+          ? await q.get('UPDATE users SET balance = balance + $1 WHERE id = $2 AND balance + $1 >= 0 RETURNING balance', [e.delta, e.userId])
+          : await q.get('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [e.delta, e.userId]);
+        if (!row) {
+          const exists = await q.get('SELECT balance FROM users WHERE id = $1', [e.userId]);
+          if (!exists) continue; // istifadəçi silinibsə
+          throw new Error(`Balans 0-dan aşağı düşərdi (istifadəçi ${e.userId}) — paket ${batchId} tətbiq edilmədi`);
+        }
         const bal = Number(row.balance);
         balances[e.userId] = bal;
         await q.run(

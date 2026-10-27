@@ -7,6 +7,8 @@ import { WebSocketServer } from 'ws';
 import { openDb } from './db.js';
 import { Store, UserError, publicUser } from './store.js';
 import { RoomManager } from './rooms.js';
+import { Finance } from './finance.js';
+import { DebtWorker } from './debts.js';
 import { GameError } from './game/engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,12 +45,16 @@ const isAdmin = (u) => u && u.status === 'approved' && u.role === 'admin';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
-export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secure = process.env.NODE_ENV === 'production', botDelay, retryFast, retrySlow, adminUser = process.env.ADMIN_USERNAME || 'admin', adminPass = process.env.ADMIN_PASSWORD || 'admin123', limits = { register: 5, login: 10 } } = {}) {
+export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secure = process.env.NODE_ENV === 'production', botDelay, retryFast, retrySlow, adminUser = process.env.ADMIN_USERNAME || 'admin', adminPass = process.env.ADMIN_PASSWORD || 'admin123', limits = { register: 5, login: 10 }, debtIntervalMs = 30_000 } = {}) {
   const db = await openDb({ url: dbUrl, file: dbFile });
   const store = new Store(db);
   await store.ensureAdmin(adminUser, adminPass);
   await store.recoverActiveRounds();
   const rooms = new RoomManager(store, { botDelay, retryFast, retrySlow });
+  const finance = new Finance(db);
+  const debts = new DebtWorker(finance, rooms, { intervalMs: debtIntervalMs });
+  rooms.onBalanceUp = (id) => debts.kick(id);
+  debts.scan(); // açılışda vaxtı keçmiş borcları yoxla (server yatıbsa)
 
   const sessionCookie = (token, maxAge) =>
     `${COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
@@ -61,6 +67,32 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     return arr.length > max;
   }
 
+  function readRaw(req, max) {
+    return new Promise((resolve, reject) => {
+      let size = 0; const chunks = [];
+      req.on('data', (c) => { size += c.length; if (size > max) { reject(new UserError('Fayl 2 MB-dan böyükdür.')); req.destroy(); } else chunks.push(c); });
+      req.on('end', () => resolve(Buffer.concat(chunks)));
+      req.on('error', reject);
+    });
+  }
+
+  // maliyyə nəticəsindən sonra: bildirişlər canlı göndərilir (yalnız aidiyyəti oyunçuya)
+  const pushNotify = (r) => { for (const n of r?.notify || []) rooms.send(n.userId, { t: 'notify', kind: n.kind, text: n.text }); return r; };
+  const toStaff = (msg) => { for (const id of rooms.sockets.keys()) staffIds.has(id) && rooms.send(id, msg); };
+  const staffIds = new Set((await db.all(`SELECT id FROM users WHERE role IN ('admin', 'moderator') AND status = 'approved'`)).map((r) => Number(r.id)));
+  const azLower = (x) => String(x ?? '').toLocaleLowerCase('az');
+  const strip = (r) => { const { changes, notify, ...rest } = r || {}; return rest; };
+
+  async function processAvatar(buf) {
+    let sharp;
+    try { sharp = (await import('sharp')).default; } catch { throw new UserError('Şəkil emalı serverdə mövcud deyil (sharp paketi quraşdırılmayıb).'); }
+    let meta;
+    try { meta = await sharp(buf, { failOn: 'error', limitInputPixels: 40_000_000 }).metadata(); } catch { throw new UserError('Fayl həqiqi şəkil deyil və ya zədəlidir.'); }
+    if (!['jpeg', 'png', 'webp'].includes(meta.format)) throw new UserError('Yalnız JPG, PNG və WebP şəkillər qəbul olunur.');
+    // kiçildilir (256×256), EXIF/GPS və digər metadata atılır (sharp standart olaraq metadata yazmır)
+    return sharp(buf, { failOn: 'error' }).rotate().resize(256, 256, { fit: 'cover' }).webp({ quality: 80 }).toBuffer();
+  }
+
   async function api(req, res, url) {
     const cookies = parseCookies(req.headers.cookie);
     const me = await store.userByToken(cookies[COOKIE]);
@@ -69,9 +101,9 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     const m = req.method;
 
     if (p === '/api/register' && m === 'POST') {
-      if (rateLimited(ip, 'reg', limits.register)) throw new UserError('Çox cəhd. Bir az gözləyin.');
-      await store.register(await readBody(req));
-      return json(res, 200, { ok: true, msg: 'Qeydiyyat tamamlandı. Daxil olub demo oynaya bilərsiniz; admin təsdiq etdikdən sonra real oyun açılacaq.' });
+      if (rateLimited(ip, 'reg', limits.register) || rateLimited(ip, 'reg-h', limits.register * 6, 3_600_000)) throw new UserError('Çox qeydiyyat cəhdi. Bir az sonra yenidən yoxlayın.');
+      const r = await store.register(await readBody(req), finance);
+      return json(res, 200, { ok: true, bonus: r.bonus, msg: r.bonus ? `Qeydiyyat tamamlandı! Hesabınıza ${r.bonus} oyun xalı virtual başlanğıc bonusu yazıldı. Daxil olun.` : 'Qeydiyyat tamamlandı. Daxil olun.' });
     }
     if (p === '/api/login' && m === 'POST') {
       if (rateLimited(ip, 'login', limits.login)) throw new UserError('Çox cəhd. Bir az gözləyin.');
@@ -93,12 +125,79 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       return json(res, 200, { ok: true });
     }
 
-    // aşağıdakılar yalnız təsdiqlənmiş istifadəçilər üçün (demo istifadəçi real məlumat görmür)
-    if (me.status !== 'approved') return json(res, 403, { error: 'Hesabınız təsdiq gözləyir.' });
+    const av = p.match(/^\/api\/avatar\/(\d+)$/);
+    if (av && m === 'GET') {
+      const img = await store.getAvatar(Number(av[1]));
+      if (!img) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(img);
+    }
+
+    if (me.status !== 'approved') return json(res, 403, { error: 'Hesabınız aktiv deyil.' });
+
+    if (p === '/api/me/avatar' && m === 'POST') {
+      if (rateLimited(me.id, 'avatar', 10)) throw new UserError('Çox cəhd. Bir az gözləyin.');
+      const raw = await readRaw(req, 2 * 1024 * 1024);
+      if (!raw.length) throw new UserError('Şəkil seçin.');
+      const ver = await store.setAvatar(me.id, await processAvatar(raw));
+      rooms.userUpdated(publicUser(await store.getUser(me.id)));
+      return json(res, 200, { avatarVer: ver });
+    }
+    if (p === '/api/me/avatar' && m === 'DELETE') {
+      const ver = await store.deleteAvatar(me.id);
+      rooms.userUpdated(publicUser(await store.getUser(me.id)));
+      return json(res, 200, { avatarVer: ver, removed: true });
+    }
 
     if (p === '/api/rooms' && m === 'GET') return json(res, 200, { rooms: rooms.publicList() });
     if (p === '/api/my-transactions' && m === 'GET') return json(res, 200, { items: await store.transactions(me.id, 100) });
     if (p === '/api/my-stats' && m === 'GET') return json(res, 200, { items: await store.pairStats(me.id) });
+    if (p === '/api/profile' && m === 'GET') {
+      const prof = await finance.profile(me.id);
+      return json(res, 200, { ...prof, stats: await store.pairStats(me.id), user: publicUser(await store.getUser(me.id)) });
+    }
+    if (p === '/api/notifications' && m === 'GET') return json(res, 200, { items: await finance.notifications(me.id) });
+    if (p === '/api/notifications/read' && m === 'POST') { await finance.markNotificationsRead(me.id); return json(res, 200, { ok: true }); }
+
+    // alıcı axtarışı (hədiyyə/borc üçün): yalnız aktiv insan hesabları, özü xaric
+    if (p === '/api/users/search' && m === 'GET') {
+      const qx = azLower(url.searchParams.get('q')).trim();
+      if (qx.length < 1) return json(res, 200, { users: [] });
+      const all = await store.listUsers();
+      const users = all.filter((u) => u.status === 'approved' && u.id !== me.id && (azLower(u.display_name).includes(qx) || azLower(u.username).includes(qx)))
+        .slice(0, 20).map((u) => ({ id: u.id, displayName: u.display_name, username: u.username, avatarVer: Number(u.avatar_ver || 0) }));
+      return json(res, 200, { users });
+    }
+
+    // ---- oyunçunun maliyyə əməliyyatları ----
+    if (p.startsWith('/api/credit/') || p === '/api/gift' || p.startsWith('/api/loans/')) {
+      if (m !== 'POST') return json(res, 405, { error: 'POST gözlənilir.' });
+      if (rateLimited(me.id, 'fin', 30)) throw new UserError('Çox sorğu. Bir az gözləyin.');
+      const b = await readBody(req);
+      let r;
+      if (p === '/api/credit/request') {
+        r = await finance.requestCredit(me.id, b.amount, b.note, b.key);
+        if (!r.duplicate) toStaff({ t: 'staff', kind: 'credit', text: `${me.display_name} ${r.amount} oyun xalı kredit istəyir.` });
+      } else if (p === '/api/credit/cancel') r = await finance.cancelCreditRequest(me.id, Number(b.requestId), b.key);
+      else if (p === '/api/credit/repay') r = await rooms.moneyOp(me.id, () => finance.repayCredit(me.id, b.amount, b.key));
+      else if (p === '/api/gift') r = await rooms.moneyOp(me.id, () => finance.giftPlayer(me.id, Number(b.toId), b.amount, b.note, b.key));
+      else if (p === '/api/loans/offer') r = await finance.offerLoan(me.id, Number(b.borrowerId), b.amount, Number(b.dueAt), b.note, b.key);
+      else {
+        const lm = p.match(/^\/api\/loans\/(\d+)\/(accept|decline|cancel|repay)$/);
+        if (!lm) return json(res, 404, { error: 'Tapılmadı.' });
+        const loanId = Number(lm[1]);
+        if (lm[2] === 'accept') {
+          const loan = await db.get('SELECT lender_id FROM loans WHERE id = $1', [loanId]);
+          if (!loan) throw new UserError('Təklif tapılmadı.');
+          // pul borc verənin balansından çıxır → onun otaq növbəsində
+          r = await rooms.moneyOp(Number(loan.lender_id), () => finance.acceptLoan(me.id, loanId, b.key));
+        } else if (lm[2] === 'decline') r = await finance.declineLoan(me.id, loanId, b.key);
+        else if (lm[2] === 'cancel') r = await finance.cancelLoan(me.id, loanId, b.key);
+        else r = await rooms.moneyOp(me.id, () => finance.repayLoan(me.id, loanId, b.amount, b.key));
+      }
+      pushNotify(r);
+      return json(res, 200, strip(r));
+    }
 
     // ---- admin / moderator ----
     if (!p.startsWith('/api/admin/')) return json(res, 404, { error: 'Tapılmadı.' });
@@ -110,8 +209,28 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       return json(res, 200, { items: await store.transactions(uid, 300) });
     }
     if (p === '/api/admin/stats' && m === 'GET') return json(res, 200, { pairs: await store.allPairStats() });
+    if (p === '/api/admin/credit' && m === 'GET') return json(res, 200, await finance.adminCreditOverview());
+    if (p === '/api/admin/loans' && m === 'GET') return json(res, 200, { loans: await finance.adminLoans() });
+    if (p === '/api/admin/gifts' && m === 'GET') return json(res, 200, { items: await finance.adminGiftHistory() });
+    if (p === '/api/admin/settings' && m === 'GET') return json(res, 200, { signupBonus: await finance.signupBonus() });
+    if (p === '/api/admin/settings' && m === 'POST') {
+      if (!isAdmin(me)) throw new UserError('Ayarları yalnız admin dəyişə bilər.');
+      const b = await readBody(req);
+      return json(res, 200, { signupBonus: await finance.setSignupBonus(b.signupBonus) });
+    }
 
-    const mm = p.match(/^\/api\/admin\/users\/(\d+)\/(status|balance|name|role|password|reset-negative)$/);
+    const cm = p.match(/^\/api\/admin\/credit\/(\d+)\/(approve|reject)$/);
+    if (cm && m === 'POST') {
+      const b = await readBody(req);
+      const r = cm[2] === 'approve'
+        ? await finance.approveCredit(me.id, Number(cm[1]), b.amount, b.newLimit, b.note, b.key)
+        : await finance.rejectCredit(me.id, Number(cm[1]), b.note, b.key);
+      rooms.syncChanges(r.changes, null);
+      pushNotify(r);
+      return json(res, 200, strip(r));
+    }
+
+    const mm = p.match(/^\/api\/admin\/users\/(\d+)\/(status|balance|name|role|password|reset-negative|gift|credit-limit)$/);
     if (mm && m === 'POST') {
       const targetId = Number(mm[1]);
       const action = mm[2];
@@ -127,17 +246,22 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
         if (b.status === 'approved') rooms.userUpdated(publicUser(await store.getUser(targetId)));
         else { rooms.leave(targetId); rooms.disconnectUser(targetId); }
       } else if (action === 'balance') {
-        const amount = Math.trunc(Number(b.amount));
-        if (!Number.isFinite(amount) || amount === 0) throw new UserError('Məbləğ düzgün deyil.');
-        const note = String(b.note || '').slice(0, 100);
-        const bal = await store.addBalance(targetId, amount, `Admin: ${amount > 0 ? 'əlavə' : 'çıxma'}${note ? ' — ' + note : ''}`, me.id, 'admin');
-        rooms.balanceChanged(targetId, bal, amount);
+        // "Əlavə et / Çıx": məbləğ həmişə müsbət yazılır; çıxma balansı 0-dan aşağı salmır
+        const run = () => finance.adminAdjust(me.id, targetId, b.op, b.amount, b.note, b.key);
+        const r = b.op === 'sub' ? await rooms.moneyOp(targetId, run) : await run();
+        if (b.op !== 'sub') rooms.syncChanges(r.changes, null);
+      } else if (action === 'gift') {
+        const r = await finance.adminGift(me.id, targetId, b.amount, b.note, b.key);
+        rooms.syncChanges(r.changes, null);
+        pushNotify(r);
+      } else if (action === 'credit-limit') {
+        pushNotify(await finance.setCreditLimit(me.id, targetId, b.limit, b.key));
       } else if (action === 'reset-negative') {
         if (!isAdmin(me)) throw new UserError('Mənfi balansı yalnız admin sıfırlaya bilər.');
         if (b.confirm !== true) throw new UserError('Təsdiq tələb olunur.');
         if (rooms.inActiveRealRound(targetId)) throw new UserError('Oyunçu hazırda raunddadır. Raund bitəndən sonra sıfırlayın.');
         const r = await store.resetNegative(targetId, me.id);
-        rooms.balanceChanged(targetId, r.balance, r.delta);
+        rooms.syncChanges([{ userId: targetId, delta: r.delta, balance: r.balance }], null);
       } else if (action === 'name') {
         await store.setDisplayName(targetId, b.displayName);
         rooms.userUpdated(publicUser(await store.getUser(targetId)));
@@ -145,6 +269,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
         if (!isAdmin(me)) throw new UserError('Rolları yalnız admin dəyişə bilər.');
         if (target.id === me.id) throw new UserError('Öz rolunuzu dəyişə bilməzsiniz.');
         await store.setRole(targetId, b.role);
+        if (b.role === 'player') staffIds.delete(targetId); else staffIds.add(targetId);
         rooms.userUpdated(publicUser(await store.getUser(targetId)));
       } else if (action === 'password') {
         await store.setPassword(targetId, b.password);
@@ -203,6 +328,8 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
         if (!u || (u.status !== 'approved' && u.status !== 'pending')) { ws.close(4001, 'blocked'); return; }
         switch (msg.t) {
           case 'createRoom': rooms.create(u, msg); break;
+          case 'emoji': rooms.emoji(u.id, msg.e); break;
+          case 'chat': rooms.chat(u.id, msg.text); break;
           case 'joinRoom': rooms.join(u, msg.code, msg.password); break;
           case 'leaveRoom': rooms.leave(u.id); break;
           case 'startRound': await rooms.startRound(u.id); break;
@@ -232,7 +359,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
   ping.unref?.();
 
   return {
-    server, store, rooms, db,
+    server, store, rooms, db, finance, debts,
     listen: (port) => new Promise((resolve) => server.listen(port, () => resolve(server.address().port))),
     // Server dayanarkən: yeni bağlantı qəbul etmə, gözləyən paketləri yazmağa çalış
     async shutdown(timeoutMs = 8000) {
@@ -242,6 +369,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     },
     async close() {
       clearInterval(ping);
+      debts.stop();
       rooms.stop();
       for (const ws of wss.clients) ws.terminate();
       await new Promise((r) => server.close(() => r()));

@@ -21,13 +21,30 @@
       <symbol id="suit-D" viewBox="0 0 100 100"><path d="M50 3 L88 50 L50 97 L12 50 Z"/></symbol>
       <symbol id="suit-S" viewBox="0 0 100 100"><path d="M50 4 C36 26 6 40 6 61 C6 75 17 83 29 83 C37 83 43 79 47 73 C46 84 42 91 33 96 L67 96 C58 91 54 84 53 73 C57 79 63 83 71 83 C83 83 94 75 94 61 C94 40 64 26 50 4 Z"/></symbol>
       <symbol id="suit-C" viewBox="0 0 100 100"><circle cx="50" cy="28" r="21"/><circle cx="27" cy="58" r="21"/><circle cx="73" cy="58" r="21"/><path d="M44 50 L56 50 C55 76 59 88 67 96 L33 96 C41 88 45 76 44 50 Z"/></symbol>
-      <pattern id="backPattern" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-        <rect width="10" height="10" fill="#8f1730"/><rect width="5" height="5" fill="#a51d39"/>
+      <!-- arxa üz naxışı: kiçik çiçəklər və nöqtələr -->
+      <pattern id="backPattern" width="8" height="8" patternUnits="userSpaceOnUse">
+        <circle cx="4" cy="4" r="1.1" fill="#cfdcd3" opacity=".55"/>
+        <circle cx="0" cy="0" r=".5" fill="#cfdcd3" opacity=".45"/><circle cx="8" cy="0" r=".5" fill="#cfdcd3" opacity=".45"/>
+        <circle cx="0" cy="8" r=".5" fill="#cfdcd3" opacity=".45"/><circle cx="8" cy="8" r=".5" fill="#cfdcd3" opacity=".45"/>
       </pattern>
+      <!-- arxa üzün dörddə bir bəzəyi (sol-yuxarı); güzgü ilə 4 küncə yerləşdirilir -->
+      <g id="backOrnament" fill="none" stroke="#e6ece8" stroke-linecap="round">
+        <path d="M14 14 Q30 12 34 24 Q36 32 28 32 Q22 31 24 25 Q27 21 30 25" stroke-width="1.3"/>
+        <path d="M14 14 Q12 30 24 34 Q32 36 32 28" stroke-width="1.3"/>
+        <path d="M34 24 Q44 26 46 38 Q47 46 40 46 Q35 45 37 40" stroke-width="1"/>
+        <path d="M24 34 Q26 44 38 46" stroke-width="1"/>
+        <path d="M14 40 Q22 44 22 54 Q22 62 30 62 Q36 61 34 55" stroke-width="1"/>
+        <path d="M40 14 Q44 22 54 22" stroke-width="1"/>
+        <circle cx="18" cy="18" r="2.2" fill="#e6ece8" stroke="none"/>
+        <circle cx="46" cy="52" r="1.6" fill="#e6ece8" stroke="none"/>
+        <path d="M36 52 Q42 56 48 58" stroke-width=".8"/>
+        <path d="M17 50 l2 -3 l2 3 l-2 3 z M42 18 l2 -3 l2 3 l-2 3 z" fill="#e6ece8" stroke="none"/>
+      </g>
     </defs>
   </svg>
   <div id="app"></div>
   <div id="toasts"></div>
+  <div id="fx" aria-hidden="true"></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

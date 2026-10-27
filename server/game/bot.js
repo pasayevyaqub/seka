@@ -54,6 +54,10 @@ export function decide(view, botId, mem, now) {
     return null;
   }
 
+  if (me?.secretJackpot && !me.secretJackpot.decided) {
+    return { type: rnd() < 0.5 ? 'jackpotOpen' : 'jackpotHide' };
+  }
+
   if (view.phase !== 'betting' || !me || me.status !== 'active') return null;
 
   if (!me.isTurn) {
@@ -64,8 +68,11 @@ export function decide(view, botId, mem, now) {
   // ---- bot növbəsi ----
   mem.turns = (mem.turns || 0) + 1;
   const min = view.minXod;
-  const maxBet = view.maxBet > 0 ? Math.max(view.maxBet, min) : min * 4;
+  const myBal = view.players.find((p) => p.id === botId)?.balance ?? 0;
+  if (myBal < min) return me.secretJackpot ? { type: 'jackpotOpen' } : { type: 'pas' };
+  const maxBet = Math.min(myBal, view.maxBet > 0 ? Math.max(view.maxBet, min) : min * 4);
   const raise = (k) => ({ type: 'xod', amount: Math.min(maxBet, Math.max(min, Math.round(min * k))) });
+  const pas = () => (me.secretJackpot ? raise(1) : { type: 'pas' });
   const two = view.activeCount === 2;
 
   if (two && me.canOffer && mem.turns >= 3 && s >= 18 && s <= 25 && rnd() < 0.2) {
@@ -86,5 +93,5 @@ export function decide(view, botId, mem, now) {
   // zəif əl: bəzən blöf
   if (mem.turns === 1 && rnd() < 0.45) return raise(1);
   if (me.canBaxis && rnd() < 0.25) return { type: 'baxis' };
-  return { type: 'pas' };
+  return pas();
 }

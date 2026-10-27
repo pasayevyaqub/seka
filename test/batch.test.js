@@ -191,7 +191,7 @@ test('v1 bazasından migration: hesablar, şifrə hash-ləri, balanslar, tarixç
   }
   const store = new Store(db);
   const users = await db.all('SELECT id, username, pass_hash, status, role, balance FROM users ORDER BY id');
-  assert.deepEqual(users.map((u) => [u.username, u.status, u.role, Number(u.balance)]), [['admin', 'approved', 'admin', 0], ['yaqub', 'approved', 'player', -70], ['anar', 'pending', 'player', 0]]);
+  assert.deepEqual(users.map((u) => [u.username, u.status, u.role, Number(u.balance)]), [['admin', 'approved', 'admin', 0], ['yaqub', 'approved', 'player', -70], ['anar', 'approved', 'player', 0]]); // köhnə pending → aktiv, bonus verilmir
   assert.equal(users[0].pass_hash, hashA);
   assert.ok(checkPassword('yaqub123', users[1].pass_hash));
   assert.equal((await store.login('admin', 'admin-sirr')).user.username, 'admin');
@@ -199,7 +199,8 @@ test('v1 bazasından migration: hesablar, şifrə hash-ləri, balanslar, tarixç
   const tx = await db.all('SELECT delta, balance_after, reason, kind FROM transactions ORDER BY id');
   assert.deepEqual(tx.map((t) => [Number(t.delta), Number(t.balance_after), t.reason, t.kind ?? null]), [[30, 30, 'Admin: əlavə', null], [-100, -70, 'Xod', null]]);
   const migs = (await db.all('SELECT id FROM schema_migrations ORDER BY id')).map((m) => Number(m.id));
-  assert.deepEqual(migs, [1, 2, 3]);
+  assert.deepEqual(migs, [1, 2, 3, 4]);
+  assert.equal(Number((await db.get("SELECT COUNT(*) AS n FROM transactions WHERE kind = 'bonus'")).n), 0);
   // ensureAdmin mövcud admini dəyişmir
   await store.ensureAdmin('admin', 'basqa');
   assert.equal((await db.get(`SELECT pass_hash FROM users WHERE username = 'admin'`)).pass_hash, hashA);

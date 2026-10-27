@@ -80,6 +80,75 @@ const MIGRATIONS = [
       await addColumn(q, kind, 'transactions', 'batch_id', 'TEXT');
     },
   },
+  {
+    id: 4,
+    name: 'v2.2: bonus, kredit, hədiyyə, oyunçu borcları, bildirişlər, avatar, idempotency',
+    async up(q, kind) {
+      const serial = kind === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+      const blob = kind === 'pg' ? 'BYTEA' : 'BLOB';
+      await addColumn(q, kind, 'users', 'credit_debt', 'BIGINT NOT NULL DEFAULT 0');
+      await addColumn(q, kind, 'users', 'credit_limit', 'BIGINT NOT NULL DEFAULT 0');
+      await addColumn(q, kind, 'users', 'avatar', blob);
+      await addColumn(q, kind, 'users', 'avatar_ver', 'INTEGER NOT NULL DEFAULT 0');
+      await addColumn(q, kind, 'transactions', 'counterparty_id', 'INTEGER');
+      await addColumn(q, kind, 'transactions', 'op_key', 'TEXT');
+      await addColumn(q, kind, 'transactions', 'note', 'TEXT');
+      // hər maliyyə sorğusunun idempotency açarı: eyni açar ikinci dəfə heç nə dəyişmir
+      await q.run(`CREATE TABLE IF NOT EXISTS op_keys (
+        key TEXT PRIMARY KEY,
+        user_id INTEGER,
+        kind TEXT NOT NULL,
+        result TEXT,
+        created_at BIGINT NOT NULL)`);
+      await q.run(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+      await q.run(`INSERT INTO app_settings(key, value) VALUES('signup_bonus', '100') ON CONFLICT(key) DO NOTHING`);
+      await q.run(`CREATE TABLE IF NOT EXISTS credit_requests (
+        id ${serial},
+        user_id INTEGER NOT NULL,
+        amount BIGINT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        approved_amount BIGINT,
+        decided_by INTEGER,
+        note TEXT,
+        admin_note TEXT,
+        created_at BIGINT NOT NULL,
+        decided_at BIGINT)`);
+      // bir oyunçunun yalnız bir gözləyən müraciəti ola bilər
+      await q.run(`CREATE UNIQUE INDEX IF NOT EXISTS credit_req_one_pending ON credit_requests(user_id) WHERE status = 'pending'`);
+      await q.run(`CREATE TABLE IF NOT EXISTS loans (
+        id ${serial},
+        lender_id INTEGER NOT NULL,
+        borrower_id INTEGER NOT NULL,
+        amount BIGINT NOT NULL,
+        remaining BIGINT NOT NULL,
+        due_at BIGINT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'offered',
+        note TEXT,
+        created_at BIGINT NOT NULL,
+        accepted_at BIGINT,
+        closed_at BIGINT)`);
+      await q.run('CREATE INDEX IF NOT EXISTS loans_borrower ON loans(borrower_id, status, due_at, id)');
+      await q.run('CREATE INDEX IF NOT EXISTS loans_lender ON loans(lender_id, status)');
+      await q.run(`CREATE TABLE IF NOT EXISTS loan_payments (
+        id ${serial},
+        loan_id INTEGER NOT NULL,
+        amount BIGINT NOT NULL,
+        kind TEXT NOT NULL,
+        remaining_after BIGINT NOT NULL,
+        executed_at BIGINT NOT NULL)`);
+      await q.run(`CREATE TABLE IF NOT EXISTS notifications (
+        id ${serial},
+        user_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        read_at BIGINT)`);
+      await q.run('CREATE INDEX IF NOT EXISTS notif_user ON notifications(user_id, id)');
+      // qeydiyyat artıq admin təsdiqi tələb etmir: köhnə "pending" hesablar aktivləşir.
+      // blocked və rejected hesablar toxunulmaz qalır. Mövcud hesablara bonus VERİLMİR.
+      await q.run(`UPDATE users SET status = 'approved' WHERE status = 'pending'`);
+    },
+  },
 ];
 
 async function addColumn(q, kind, table, col, type) {
@@ -97,10 +166,13 @@ async function migrate(db) {
   for (const m of MIGRATIONS) {
     if (done.has(m.id)) continue;
     await db.tx(async (q) => {
+      // bir neçə server nüsxəsi eyni anda başlasa (məs. deploy zamanı) migration-lar növbə ilə və bir dəfə icra olunur
+      if (db.kind === 'pg') await q.get('SELECT pg_advisory_xact_lock(724411)');
+      if (await q.get('SELECT id FROM schema_migrations WHERE id = $1', [m.id])) return;
       await m.up(q, db.kind);
       await q.run('INSERT INTO schema_migrations(id, name, applied_at) VALUES($1, $2, $3)', [m.id, m.name, Date.now()]);
     });
-    console.log(`Migration ${m.id} tətbiq edildi: ${m.name}`);
+    if (!done.has(m.id)) console.log(`Migration ${m.id} yoxlanıldı/tətbiq edildi: ${m.name}`);
   }
 }
 

@@ -12,7 +12,11 @@ const PW_WINDOW_MS = 5 * 60_000;
 export const RETRY_FAST_MS = [1000, 2000, 4000, 8000, 15000];
 export const RETRY_SLOW_MS = 30_000;
 const BLOCKED_MSG = 'Baza bağlantısı gözlənilir — son hərəkət hələ yadda saxlanılmayıb. Bir az gözləyin.';
-export const PRACTICE_START = 1000;      // məşq (botlu / demo) otaqlarında başlanğıc virtual balans
+export const PRACTICE_START = 10_000;    // demo / botlu məşq otağında hər girişdə verilən virtual məşq balansı
+export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
+const EMOJI_GAP_MS = 3000;
+const CHAT_GAP_MS = 1500;
+const CHAT_MAX = 120;
 
 function int(v, min, max, def) {
   const n = Math.floor(Number(v));
@@ -25,9 +29,10 @@ export function cleanSettings(s = {}, base = DEFAULT_SETTINGS) {
     ante: int(s.ante, 1, 1e9, base.ante),
     minBet: int(s.minBet, 1, 1e9, base.minBet),
     maxBet: int(s.maxBet, 0, 1e9, base.maxBet),
-    jackpotAmount: int(s.jackpotAmount, 0, 1e9, base.jackpotAmount),
+    // köhnə tək "jackpotAmount" ayarı gəlirsə (köhnə klient), hər iki cəkpota tətbiq olunur
+    jackpotSix: int(s.jackpotSix ?? s.jackpotAmount, 0, 1e9, base.jackpotSix),
+    jackpotAce: int(s.jackpotAce ?? s.jackpotAmount, 0, 1e9, base.jackpotAce),
     turnSeconds: int(s.turnSeconds, 15, 600, base.turnSeconds),
-    debtLimit: int(s.debtLimit, 0, 1e12, base.debtLimit),
     maxPlayers: int(s.maxPlayers, 2, 8, base.maxPlayers),
   };
 }
@@ -58,6 +63,9 @@ export class RoomManager {
     this.userRoom = new Map();   // userId → code
     this.sockets = new Map();    // userId → Set<ws>
     this.pwFails = new Map();    // userId → [vaxtlar]
+    this.lastEmoji = new Map();  // userId → vaxt
+    this.lastChat = new Map();
+    this.onBalanceUp = null;     // (userId) => void — borc işçisini oyadır
     this.timer = setInterval(() => this.tick(), tickMs);
     this.timer.unref?.();
   }
@@ -150,11 +158,59 @@ export class RoomManager {
     return room.queue;
   }
 
+  // otaq növbəsində icra et və nəticəni/xətanı çağırana qaytar
+  runQ(room, fn) {
+    const p = room.queue.then(fn);
+    room.queue = p.catch(() => {});
+    return p;
+  }
+
+  // istifadəçinin real (məşq olmayan) otağı — onun balansı bu otağın növbəsi ilə sinxron dəyişməlidir
+  realRoomOf(userId) {
+    const room = this.rooms.get(this.userRoom.get(userId));
+    return room && !this.isPractice(room) ? room : null;
+  }
+
+  /**
+   * Balansı AZALDAN maliyyə əməliyyatı (hədiyyə, borc vermə/ödəmə, avtomatik tutulma, admin çıxması).
+   * İstifadəçi real otaqdadırsa əməliyyat həmin otağın növbəsində icra olunur: oyun hərəkətləri ilə paralel getmir,
+   * otaqda təsdiqlənməmiş oyun paketi varsa gözləmir — rədd edilir. Beləliklə yaddaşdakı oyun balansı ilə baza
+   * balansı həmişə eyni olur və eyni pul iki dəfə xərclənə bilmir.
+   */
+  async moneyOp(userId, fn) {
+    const room = this.realRoomOf(userId);
+    if (!room) { const res = await fn(); this.syncChanges(res?.changes, null); return res; }
+    return this.runQ(room, async () => {
+      this.mustNotBlocked(room);
+      const res = await fn();
+      this.syncChanges(res?.changes, room);
+      return res;
+    });
+  }
+
+  /** Bazada təsdiqlənmiş balans dəyişikliklərini klientlərə və aktiv oyunun yaddaşına çatdırır */
+  syncChanges(changes, currentRoom) {
+    for (const c of changes || []) {
+      this.send(c.userId, { t: 'balance', balance: c.balance });
+      if (c.delta > 0) this.onBalanceUp?.(c.userId);
+      const room = this.rooms.get(this.userRoom.get(c.userId));
+      if (!room || this.isPractice(room)) continue;
+      const apply = () => {
+        const m = room.members.get(c.userId);
+        if (m) m.balance = c.balance;
+        const r = room.round;
+        if (r && !r.practice && r.phase !== 'finished') r.adjustBalance(c.userId, c.delta);
+        this.broadcast(room);
+      };
+      if (room === currentRoom) apply(); else this.enqueue(room, async () => apply());
+    }
+  }
+
   // ---------- otaq əməliyyatları ----------
   create(user, opts = {}) {
     if (this.userRoom.has(user.id)) this.leave(user.id);
-    const demo = user.status !== 'approved';
-    const withBot = demo || !!opts.withBot;
+    const demo = user.status !== 'approved' || !!opts.demo;
+    const botCount = demo ? Math.min(7, Math.max(1, Math.floor(Number(opts.bots) || 1))) : (opts.withBot ? Math.min(7, Math.max(1, Math.floor(Number(opts.bots) || 1))) : 0);
     const room = {
       code: this.newCode(),
       name: cleanName(opts.name, `${user.display_name} otağı`),
@@ -183,17 +239,20 @@ export class RoomManager {
       confirmedViews: new Map(),
     };
     this.rooms.set(room.code, room);
+    if (demo) room.settings.maxPlayers = 8;
+    if (botCount) room.settings.maxPlayers = Math.max(room.settings.maxPlayers, Math.min(8, botCount + 1));
     this.seat(room, user);
-    if (withBot) this.addBotTo(room);
-    this.say(room, demo ? 'Demo otaq: botlarla məşq. Real balans dəyişmir.' : `"${room.name}" otağı yaradıldı.`);
+    for (let i = 0; i < botCount; i++) this.addBotTo(room);
+    this.say(room, demo ? `Demo: hər girişdə ${PRACTICE_START} virtual demo oyun xalı. Əsas balans, borclar və statistika dəyişmir.` : `"${room.name}" otağı yaradıldı.`);
     this.broadcast(room);
     return room.code;
   }
 
   seat(room, user) {
-    room.members.set(user.id, { id: user.id, name: user.display_name, balance: Number(user.balance), connected: true, isBot: false });
+    room.members.set(user.id, { id: user.id, name: user.display_name, balance: Number(user.balance), connected: true, isBot: false, avatarVer: Number(user.avatar_ver || 0) });
     room.seats.push(user.id);
     this.userRoom.set(user.id, room.code);
+    room.practice.set(user.id, PRACTICE_START); // məşq otağına hər girişdə demo balans yenidən 10 000
   }
 
   checkRoomPassword(user, room, password) {
@@ -300,9 +359,38 @@ export class RoomManager {
     this.leave(targetId);
   }
 
+  // ---------- emoji və çat (şəklin üzərində 2–3 saniyəlik balon) ----------
+  emoji(userId, e) {
+    const room = this.roomOf(userId);
+    if (!EMOJIS.includes(e)) throw new GameError('Bu emoji icazəli deyil.');
+    const t = Date.now();
+    if (t - (this.lastEmoji.get(userId) || 0) < EMOJI_GAP_MS) throw new GameError('Emojini 3 saniyədə bir göndərmək olar.');
+    this.lastEmoji.set(userId, t);
+    this.bubble(room, { userId, kind: 'emoji', value: e });
+  }
+
+  chat(userId, text) {
+    const room = this.roomOf(userId);
+    const msg = String(text ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+    if (!msg) throw new GameError('Boş mesaj göndərmək olmaz.');
+    const t = Date.now();
+    if (t - (this.lastChat.get(userId) || 0) < CHAT_GAP_MS) throw new GameError('Mesajları bir az yavaş göndərin.');
+    this.lastChat.set(userId, t);
+    const m = room.members.get(userId);
+    room.chatMsgs = room.chatMsgs || [];
+    room.chatMsgs.push({ t, userId, name: m?.name ?? '?', text: msg });
+    if (room.chatMsgs.length > 50) room.chatMsgs.shift();
+    this.bubble(room, { userId, kind: 'text', value: msg, name: m?.name });
+  }
+
+  // yalnız otaq üzvlərinə; masa vəziyyətini yenidən göndərmir (formalar sıfırlanmır)
+  bubble(room, b) {
+    for (const id of room.members.keys()) if (id > 0) this.send(id, { t: 'bubble', ...b, at: Date.now() });
+  }
+
   // ---------- botlar ----------
   addBotTo(room) {
-    if (room.seats.length >= room.settings.maxPlayers) throw new GameError('Boş yer yoxdur.');
+    if (room.seats.length >= Math.min(8, room.settings.maxPlayers)) throw new GameError('Boş yer yoxdur (otaqda ən çox 8 yer).');
     const id = -(++botSeq);
     const used = new Set([...room.members.values()].filter((m) => m.isBot).map((m) => m.name));
     let n = 1; while (used.has(`Bot ${n}`)) n++;
@@ -336,6 +424,12 @@ export class RoomManager {
   // ---------- raund ----------
   async startRound(userId) {
     const room = this.roomOf(userId);
+    // balanslar oxunduğu anla raund yaradılan an arasında başqa pul əməliyyatı keçməsin deyə növbədə icra olunur
+    return this.runQ(room, () => this._startRound(room, userId));
+  }
+
+  async _startRound(room, userId) {
+    if (this.rooms.get(room.code) !== room) throw new GameError('Otaq bağlanıb.');
     if (room.hostId !== userId) throw new GameError('Raundu yalnız otaq sahibi başlada bilər.');
     if (this.roundRunning(room)) throw new GameError('Raund artıq gedir.');
     this.mustNotBlocked(room);
@@ -358,6 +452,7 @@ export class RoomManager {
       const u = await this.store.getUser(id);
       if (!u || (u.status !== 'approved' && !(practice && u.status === 'pending'))) continue;
       m.name = u.display_name;
+      m.avatarVer = Number(u.avatar_ver || 0);
       m.balance = Number(u.balance);
       if (practice) {
         if (!room.practice.has(id)) room.practice.set(id, PRACTICE_START);
@@ -365,6 +460,10 @@ export class RoomManager {
       } else players.push({ id, name: u.display_name, balance: Number(u.balance) });
     }
     if (players.length < 2) throw new GameError('Ən azı 2 oyunçu lazımdır.');
+    if (!practice) {
+      const can = players.filter((p) => p.balance >= room.settings.ante);
+      if (can.length < 2) throw new GameError(`Raund üçün balansı oyun haqqına (${room.settings.ante} oyun xalı) çatan ən azı 2 oyunçu lazımdır. Balansı çatmayan oyunçu "Kredit istə" və ya Demo seçə bilər.`);
+    }
     const k = room.dealerIdx % players.length;
     const ordered = [...players.slice(k), ...players.slice(0, k)];
     room.dealerIdx++;
@@ -439,6 +538,7 @@ export class RoomManager {
             const m = room.members.get(Number(id));
             if (m) m.balance = bal;
             this.send(Number(id), { t: 'balance', balance: bal });
+            if (b.effects.some((e) => e.userId === Number(id) && e.delta > 0)) this.onBalanceUp?.(Number(id));
           }
         } catch (err) {
           this.onDbFail(room, err);
@@ -525,7 +625,7 @@ export class RoomManager {
     const room = this.rooms.get(this.userRoom.get(user.id));
     if (!room) return;
     const m = room.members.get(user.id);
-    if (m) { m.name = user.displayName; m.balance = user.balance; }
+    if (m) { m.name = user.displayName; m.balance = user.balance; m.avatarVer = user.avatarVer || 0; }
     const p = room.round?.players.get(user.id);
     if (p) p.name = user.displayName;
     this.broadcast(room);
@@ -562,7 +662,8 @@ export class RoomManager {
         r.act(id, action, now);
       } catch (e) {
         // məs. limit — növbədədirsə pas deyir ki, oyun kilidlənməsin
-        try { if (r.phase === 'betting' && r.turn === id) r.act(id, { type: 'pas' }, now); else continue; } catch { continue; }
+        if (r.phase !== 'betting' || r.turn !== id) continue;
+          try { r.act(id, { type: 'pas' }, now); } catch { try { r.act(id, { type: 'jackpotOpen' }, now); } catch { continue; } }
       }
       if (r.phase === 'betting') room.overdueSent = false;
       return this.applyEffects(room); // bir bot hərəkəti → yayım → növbəti yoxlama
@@ -588,12 +689,13 @@ export class RoomManager {
       members: room.seats.map((id) => {
         const m = room.members.get(id);
         return {
-          id, name: m.name, isBot: !!m.isBot, connected: m.connected,
+          id, name: m.name, isBot: !!m.isBot, connected: m.connected, avatarVer: m.avatarVer || 0,
           balance: practice ? (room.practice.get(id) ?? PRACTICE_START) : m.balance,
         };
       }),
       round: r ? r.viewFor(uid, now) : null,
       chat: room.chatLog || [],
+      chatMsgs: (room.chatMsgs || []).slice(-30),
       serverNow: now,
       dbWaiting: null,
     };
