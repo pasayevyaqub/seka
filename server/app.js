@@ -1,5 +1,6 @@
 // Seka — HTTP API + WebSocket server (testlər üçün createApp kimi ixrac olunur)
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
   await store.ensureAdmin(adminUser, adminPass);
   await store.recoverActiveRounds();
   const rooms = new RoomManager(store, { botDelay, retryFast, retrySlow });
+  const voiceActive = new Set();
   const finance = new Finance(db);
   const debts = new DebtWorker(finance, rooms, { intervalMs: debtIntervalMs });
   rooms.onBalanceUp = (id) => debts.kick(id);
@@ -161,6 +163,19 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     }
 
     if (me.status !== 'approved') return json(res, 403, { error: 'Hesabınız aktiv deyil.' });
+
+    if (p === '/api/voice/ice' && m === 'GET') {
+      const room = rooms.roomOfOrNull(me.id);
+      if (!room || !room.members.has(me.id)) return json(res, 403, { error: 'Əvvəl otağa qoşulun.' });
+      const iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+      const urls = String(process.env.TURN_URLS || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (urls.length && process.env.TURN_SHARED_SECRET) {
+        const username = `${Math.floor(Date.now() / 1000) + 15 * 60}:${me.id}:${room.code}`;
+        const credential = crypto.createHmac('sha1', process.env.TURN_SHARED_SECRET).update(username).digest('base64');
+        iceServers.push({ urls, username, credential });
+      }
+      return json(res, 200, { iceServers });
+    }
 
     if (p === '/api/me/avatar' && m === 'POST') {
       if (rateLimited(me.id, 'avatar', 10)) throw new UserError('Çox cəhd. Bir az gözləyin.');
@@ -404,6 +419,8 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     ws.on('pong', () => { ws.isAlive = true; });
     rooms.attach(user, ws);
     ws.send(JSON.stringify({ t: 'hello', user: publicUser(user), roomCode: rooms.userRoom.get(user.id) || null }));
+    const joinedRoom = rooms.roomOfOrNull(user.id);
+    if (joinedRoom) for (const id of voiceActive) if (id !== user.id && joinedRoom.members.has(id)) rooms.send(user.id, { t: 'voiceState', userId: id, enabled: true });
 
     ws.on('message', async (raw) => {
       let msg;
@@ -420,7 +437,12 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
           case 'emoji': rooms.emoji(u.id, msg.e); break;
           case 'chat': rooms.chat(u.id, msg.text); break;
           case 'joinRoom': rooms.join(u, msg.code, msg.password); break;
-          case 'leaveRoom': rooms.leave(u.id); break;
+          case 'leaveRoom': {
+            const room = rooms.roomOfOrNull(u.id);
+            voiceActive.delete(u.id);
+            if (room) for (const id of room.members.keys()) if (id !== u.id && id > 0) rooms.send(id, { t: 'voiceState', userId: u.id, enabled: false });
+            rooms.leave(u.id); break;
+          }
           case 'startRound': await rooms.startRound(u.id); break;
           case 'settings': rooms.updateSettings(u.id, msg.settings); break;
           case 'roomMeta': rooms.updateMeta(u.id, msg.meta); break;
@@ -429,6 +451,21 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
           case 'kick': rooms.kick(u.id, Number(msg.userId)); break;
           case 'act': await rooms.act(u.id, msg.action || {}); break;
           case 'look': await rooms.look(u.id); break;
+          case 'voiceState': {
+            const room = rooms.roomOfOrNull(u.id);
+            if (!room || !room.members.has(u.id) || room.members.get(u.id)?.isBot) break;
+            if (msg.enabled === true) voiceActive.add(u.id); else voiceActive.delete(u.id);
+            for (const id of room.members.keys()) if (id !== u.id && id > 0) rooms.send(id, { t: 'voiceState', userId: u.id, enabled: msg.enabled === true });
+            break;
+          }
+          case 'voiceSignal': {
+            const room = rooms.roomOfOrNull(u.id);
+            const target = Number(msg.to);
+            if (!room || !room.members.has(u.id) || !room.members.has(target) || target <= 0 || !voiceActive.has(u.id) || !voiceActive.has(target)) break;
+            if (!msg.signal || typeof msg.signal !== 'object' || Array.isArray(msg.signal)) break;
+            rooms.send(target, { t: 'voiceSignal', fromId: u.id, signal: msg.signal });
+            break;
+          }
           default: break;
         }
       } catch (e) {
@@ -436,7 +473,13 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
         else { console.error(e); rooms.sendError(user.id, 'Server xətası.'); }
       }
     });
-    ws.on('close', () => rooms.detach(user, ws));
+    ws.on('close', () => {
+      rooms.detach(user, ws);
+      if (voiceActive.delete(user.id)) {
+        const room = rooms.roomOfOrNull(user.id);
+        if (room) for (const id of room.members.keys()) if (id !== user.id && id > 0) rooms.send(id, { t: 'voiceState', userId: user.id, enabled: false });
+      }
+    });
   }
 
   const ping = setInterval(() => {

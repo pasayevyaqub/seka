@@ -11,6 +11,7 @@ import { decorHTML, FELT_MEDALLION } from './decor.js';
 import { peekCardHTML, peekedAll, hintNeeded } from './peek.js';
 import { ICON } from './giftfx.js';
 import { S, esc, fmt, avatarHTML, deadlineSpan, isDemo } from './core.js';
+import { voiceButtonHTML, peerVoiceActive } from './voice.js';
 
 export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
 const BUBBLE_MS = 3000;
@@ -130,6 +131,7 @@ function roomBar(room, fs) {
     <button class="rb-code" data-a="copyCode" title="Kodu kopyala" aria-label="Otaq kodu ${room.code}, kopyala">${room.hasPassword ? '🔒' : ''}${room.code}</button>
     <span class="rb-gap"></span>
     <button class="rb-btn" data-a="toggleSound" aria-label="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}" title="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}">${isMuted() ? IC.mute : IC.sound}</button>
+    ${voiceButtonHTML()}
     <button class="rb-btn" data-a="${fs ? 'fsExit' : 'fsEnter'}" aria-label="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}" title="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}">${fs ? IC.fsx : IC.fs}</button>
     ${canCredit
       ? `<button class="rb-bal" data-a="creditModal" title="Virtual oyun balansı — kredit istəmək üçün toxunun" aria-label="Balans ${fmt(bal)}, kredit istə">${balInner}</button>`
@@ -207,6 +209,7 @@ function renderSeat(p, i, n, myIdx, room, ord) {
       ${room.hostId === p.id ? '<span class="host" title="Otaq sahibi">👑</span>' : ''}
       ${p.isBot ? '<span class="botmark" title="Bot">BOT</span>' : ''}
       ${dot}
+      ${!p.isBot && peerVoiceActive(p.id) ? '<span class="voice-peer" title="Mikrofona qoşulub" aria-label="Səsə qoşulub">🎙</span>' : ''}
       ${statusTag(p, r)}
       <div class="bubble-slot">${bubbleHTML(p.id)}</div>
     </div>

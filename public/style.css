@@ -1379,3 +1379,10 @@ body.in-room { --serif: Georgia, 'Times New Roman', 'Noto Serif', serif; }
   .lion-fx .ln-stage.photo .ln-shake { -webkit-mask: none; mask: none; }
   .lion-fx .ln-pic { -webkit-mask: radial-gradient(ellipse 50% 50% at 50% 50%, #000 62%, transparent 100%); mask: radial-gradient(ellipse 50% 50% at 50% 50%, #000 62%, transparent 100%); }
 }
+
+/* Otaqdaxili WebRTC mikrofon düyməsi */
+.rbar .voice-btn { position:relative; color:#f1d47a; }
+.rbar .voice-btn.voice-on { background:rgba(42,190,115,.22); box-shadow:0 0 0 1px rgba(84,220,150,.5) inset; }
+.rbar .voice-btn { position:relative; color:#f1d47a; }
+.rbar .voice-btn.voice-on { background:rgba(42,190,115,.22); box-shadow:0 0 0 1px rgba(84,220,150,.5) inset; }
+.voice-peer { position:absolute; right:-5px; top:-5px; z-index:3; display:grid; place-items:center; width:19px; height:19px; border-radius:50%; background:#1e9b62; color:#fff; font-size:11px; box-shadow:0 0 0 2px #092016; }

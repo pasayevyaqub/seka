@@ -373,3 +373,13 @@ Kod Render ünvanını dəyişmir. `xxx-seka.onrender.com` kimi ünvanı dəyiş
 - `public/`: frontend modulları (`core`, `room`, `profile`, `admin`, `app`, DOM yeniləməsi `morph`, kartın küncündən baxma `peek`, bəzəklər `decor`, hədiyyə pəncərəsi `gifts`, hədiyyə animasiyaları `giftfx`), kartlar (`cards.js`), virtual əskinaslar (`notes.js`), animasiyalar (`fx.js`), səslər (`sound.js`) və xal (`score.js`).
 - Brauzer yoxlamaları (Playwright, istəyə görə): `tools/ui-layout.cjs` (13 ekran ölçüsü × 2–8 oyunçu, üst-üstə düşmə/ekrandan kənar/üfüqi sürüşmə), `tools/ui-v28.cjs` (xal, balans, onlayn status, çat, borc, Şir, yenidən qoşulma — özü test serveri başladır). Lokal test serveri: `tools/devserver.mjs` (yalnız yoxlama üçün, Render-də işə salmayın).
 - Testlər `test/` qovluğundadır. Hamısını işə salmaq üçün: `npm test`. PostgreSQL üzərində: `TEST_DATABASE_URL=postgres://... npm test` (`batch`, `finance`, `integration` və `money-integration` faylları).
+
+## Otaq daxili səs (ilk versiya)
+
+- Otaq üst panelindəki 🎤 düyməsi yalnız basıldıqda mikrofon icazəsi istəyir. Aktiv olandan sonra eyni düymə mikrofonu səssizə alır/açır.
+- Mikrofon icazəsi verilməsə oyun adi qaydada davam edir. Başqa səsə qoşulmuş oyunçunun yanında 🎙 nişanı görünür.
+- Media WebRTC ilə ötürülür, mövcud WebSocket yalnız offer/answer/ICE siqnallarını ötürür.
+- İlk versiya mesh-dir; 5 nəfərlə sınaq üçün nəzərdə tutulub. Yalnız STUN ilə bəzi mobil operatorlarda qoşulmaya bilər.
+- TURN-u əlavə etmək üçün TURN REST/shared-secret uyğun TURN xidməti lazımdır. Render-də `TURN_URLS` (vergüllə ayrılmış `turn:` ünvanları) və `TURN_SHARED_SECRET` (yalnız serverdə saxlanan gizli açar) environment dəyişənlərini yazın. TURN serveri həmin shared-secret açarla quraşdırılmalıdır. Gizli açarı GitHub-a və ya brauzerə qoymayın.
+- Səs transport səviyyəsində WebRTC SRTP ilə şifrələnir. Bu, SFU-da ayrıca E2EE təmin etmir.
+- iPhone Safari-də ekran kilidlənəndə və ya başqa tətbiqə keçəndə səs kəsilə bilər; brauzer buna zəmanət vermir.

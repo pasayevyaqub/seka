@@ -10,6 +10,7 @@ import { installPeek, afterRenderPeek } from './peek.js';
 import { morph } from './morph.js';
 import { renderProfile, loadProfile, profileForms, profileHandlers, onSearchInput, pickRecipient, uploadAvatar, creditModal, STATS_NOTE } from './profile.js';
 import { renderAdmin, loadAdmin, refreshAdminList, adminForms, adminHandlers, adminModalSubmit } from './admin.js';
+import { initVoice, toggleVoice, onVoiceSignal, onVoiceState, stopVoice } from './voice.js';
 
 const $app = document.getElementById('app');
 const SETTINGS_FIELDS = [
@@ -55,6 +56,7 @@ function connect() {
       if (S.view !== 'admin' && S.view !== 'profile') S.view = 'room';
       if (S.view === 'room') render();
     } else if (m.t === 'left') {
+      stopVoice(false);
       S.room = null; S.bet = null; S.pick = null;
       if (S.view === 'room') S.view = 'lobby';
       exitFullscreen();
@@ -67,6 +69,10 @@ function connect() {
       if (S.view === 'profile') loadProfile(render);
     } else if (m.t === 'tgift') {
       onGiftEvent(m);
+    } else if (m.t === 'voiceSignal') {
+      onVoiceSignal(m);
+    } else if (m.t === 'voiceState') {
+      onVoiceState(m);
     } else if (m.t === 'bubble') {
       showBubble(m);
     } else if (m.t === 'notify') {
@@ -155,6 +161,7 @@ const send = (msg) => {
   toast('Serverlə əlaqə yoxdur, yenidən qoşulur...');
   return false;
 };
+initVoice({ send, getRoom: () => S.room, getUser: () => S.user, repaint: () => { if (S.view === 'room') render(); } });
 // hər hərəkət gördüyümüz vəziyyətin versiyası ilə göndərilir (təkrar/köhnə klik server tərəfindən rədd olunur)
 const act = (action) => {
   if (S.busy) return;
@@ -461,6 +468,7 @@ const H = {
   fsEnter: () => enterFullscreen(),
   fsExit: () => { exitFullscreen(); render(); },
   leave: () => { if (confirm('Otaqdan çıxmaq istəyirsiniz? Raund gedirsə pas sayılacaq.')) send({ t: 'leaveRoom' }); },
+  voiceToggle: () => toggleVoice(),
   start: () => send({ t: 'startRound' }),
   settingsModal: () => roomSettingsModal(),
   addBot: () => { send({ t: 'addBot' }); setTimeout(() => S.modal?.kind === 'settings' && roomSettingsModal(), 300); },
