@@ -199,7 +199,7 @@ test('v1 bazasından migration: hesablar, şifrə hash-ləri, balanslar, tarixç
   const tx = await db.all('SELECT delta, balance_after, reason, kind FROM transactions ORDER BY id');
   assert.deepEqual(tx.map((t) => [Number(t.delta), Number(t.balance_after), t.reason, t.kind ?? null]), [[30, 30, 'Admin: əlavə', null], [-100, -70, 'Xod', null]]);
   const migs = (await db.all('SELECT id FROM schema_migrations ORDER BY id')).map((m) => Number(m.id));
-  assert.deepEqual(migs, [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(migs, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   assert.equal((await db.get(`SELECT value FROM app_settings WHERE key = 'player_login_open'`)).value, '1');
   // Migration 5: masa hədiyyələri — ilkin qiymətlər və 30%, mövcud balanslara toxunulmur
   assert.deepEqual((await db.all('SELECT id, price, active FROM gift_types ORDER BY sort')).map((g) => [g.id, Number(g.price), Number(g.active)]), [['card_rain', 100, 1], ['table_king', 300, 1], ['fire_ace', 1000, 1], ['lion', 500, 1]]);

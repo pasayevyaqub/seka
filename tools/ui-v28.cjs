@@ -27,6 +27,8 @@ const shot = async (p, n) => { if (SHOTS) await p.screenshot({ path: `${SHOTS}/$
 const errors = [];
 async function page(browser, user, opts = {}) {
   const ctx = await browser.newContext({ ...devices['iPhone 13'], viewport: { width: 390, height: 664 }, ...opts });
+  // v3.1: yeni raunda razılıq — bu skriptdə digər oyunçu avtomatik "Razıyam" basır (razılıq UI-si ui-v31.cjs-də ayrıca yoxlanılır)
+  await ctx.addInitScript(() => setInterval(() => document.querySelector('[data-a=consentYes]:not([disabled])')?.click(), 250));
   const p = await ctx.newPage();
   p.on('pageerror', (e) => errors.push(`${user}: ${e.message}`));
   p.on('dialog', (d) => d.accept());

@@ -308,7 +308,8 @@ export class Finance {
   }
 
   // ---------- "Borc istə": borc alan istəyir, borc verən təsdiqləyir ----------
-  async requestLoan(borrowerId, lenderId, amount, dueAt, note, key, t = now()) {
+  /** respondMs: masadan (eyni otaqdan) göndərilən istək — borc verən bu müddətdə cavab verməsə avtomatik ləğv olunur */
+  async requestLoan(borrowerId, lenderId, amount, dueAt, note, key, t = now(), respondMs = null) {
     amount = amountOf(amount);
     lenderId = Number(lenderId);
     dueAt = Number(dueAt);
@@ -320,10 +321,15 @@ export class Finance {
       const borrower = await this.activeUser(ctx.q, borrowerId);
       const lender = await this.activeUser(ctx.q, lenderId, 'Borc verən');
       const row = await ctx.q.get(
-        `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at) VALUES($1, $2, $3, $3, $4, 'requested', $5, $6) RETURNING id`,
-        [lenderId, borrowerId, amount, dueAt, cleanNote(note), t]);
-      await this.notifyIn(ctx, lenderId, 'loan', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istəyir. Masada 🤝 zolağından və ya Profilim bölməsindən təsdiqləyin və ya rədd edin.`);
-      return { loanId: Number(row.id), lenderName: lender.display_name };
+        `INSERT INTO loans(lender_id, borrower_id, amount, remaining, due_at, status, note, created_at, respond_by) VALUES($1, $2, $3, $3, $4, 'requested', $5, $6, $7) RETURNING id`,
+        [lenderId, borrowerId, amount, dueAt, cleanNote(note), t, respondMs ? t + respondMs : null]);
+      if (respondMs) {
+        // masada: bildiriş kartı ayrıca (loanAsk) göstərilir — burada yalnız tarixçə üçün qeyd (toast yox)
+        await this.notifyIn(ctx, lenderId, 'loan_ask', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istədi (masada, ${Math.round(respondMs / 1000)} san cavab vaxtı).`);
+      } else {
+        await this.notifyIn(ctx, lenderId, 'loan', `🙏 ${borrower.display_name} sizdən ${money(amount)} borc istəyir. Masada 🤝 zolağından və ya Profilim bölməsindən təsdiqləyin və ya rədd edin.`);
+      }
+      return { loanId: Number(row.id), lenderName: lender.display_name, borrowerName: borrower.display_name, amount, dueAt, respondBy: respondMs ? t + respondMs : null };
     });
   }
 
@@ -334,17 +340,18 @@ export class Finance {
       if (!loan || Number(loan.lender_id) !== lenderId) throw new UserError('İstək tapılmadı.');
       if (loan.status !== 'requested') throw new UserError('Bu istək artıq aktiv deyil.');
       if (Number(loan.due_at) <= t) throw new UserError('Qaytarma vaxtı artıq keçib — bu istək təsdiqlənə bilməz.');
+      if (loan.respond_by != null && Number(loan.respond_by) < t) throw new UserError('Cavab vaxtı bitib — istək avtomatik ləğv olunub.');
       const lender = await this.activeUser(ctx.q, lenderId);
       const borrower = await this.activeUser(ctx.q, loan.borrower_id, 'Borc alan');
-      const st = await ctx.q.run(`UPDATE loans SET status = 'active', accepted_at = $1 WHERE id = $2 AND status = 'requested' AND due_at > $1`, [t, loanId]);
+      const st = await ctx.q.run(`UPDATE loans SET status = 'active', accepted_at = $1 WHERE id = $2 AND status = 'requested' AND due_at > $1 AND (respond_by IS NULL OR respond_by >= $1)`, [t, loanId]);
       if (st.changes !== 1) throw new UserError('Bu istək artıq aktiv deyil.');
       const amount = Number(loan.amount);
       const b1 = await this.debit(ctx, lenderId, amount, `Balansınız bu borc üçün çatmır (${money(amount)}).`);
       const b2 = await this.creditTo(ctx, borrower.id, amount);
       await this.journal(ctx, { userId: lenderId, delta: -amount, balance: b1, reason: `Borc verildi → ${borrower.display_name} (#${loanId})`, kind: 'loan_out', counterparty: borrower.id });
       await this.journal(ctx, { userId: borrower.id, delta: amount, balance: b2, reason: `Borc alındı ← ${lender.display_name} (#${loanId})`, kind: 'loan_in', counterparty: lenderId });
-      await this.notifyIn(ctx, borrower.id, 'loan', `${lender.display_name} borc istəyinizi (${money(amount)}) təsdiqlədi.`);
-      return { loanId, amount };
+      await this.notifyIn(ctx, borrower.id, 'loan', `✅ ${lender.display_name} borc istəyinizi (${money(amount)}) qəbul etdi — xal balansınıza keçdi.`);
+      return { loanId, amount, borrowerId: borrower.id };
     });
   }
 
@@ -354,9 +361,30 @@ export class Finance {
       if (!loan || Number(loan.lender_id) !== lenderId) throw new UserError('İstək tapılmadı.');
       const st = await ctx.q.run(`UPDATE loans SET status = 'declined', closed_at = $1 WHERE id = $2 AND status = 'requested'`, [now(), loanId]);
       if (st.changes !== 1) throw new UserError('Bu istək artıq aktiv deyil.');
-      await this.notifyIn(ctx, Number(loan.borrower_id), 'loan', `Borc istəyiniz (${money(Number(loan.amount))}) rədd edildi.`);
-      return { loanId };
+      const lender = await this.userIn(ctx.q, lenderId);
+      await this.notifyIn(ctx, Number(loan.borrower_id), 'loan', `❌ ${lender.display_name} borc istəyinizi (${money(Number(loan.amount))}) rədd etdi.`);
+      return { loanId, borrowerId: Number(loan.borrower_id) };
     });
+  }
+
+  /** Cavab vaxtı bitmiş masa istəklərini ləğv edir (bir dəfə: şərtli UPDATE). Hər iki tərəfə bildiriş. */
+  async expireLoanRequests(t = now()) {
+    const rows = await this.db.all(`SELECT l.*, a.display_name AS lender_name, b.display_name AS borrower_name FROM loans l
+      JOIN users a ON a.id = l.lender_id JOIN users b ON b.id = l.borrower_id
+      WHERE l.status = 'requested' AND l.respond_by IS NOT NULL AND l.respond_by < $1`, [t]);
+    const out = [];
+    for (const l of rows) {
+      const r = await this.db.tx(async (q) => {
+        const st = await q.run(`UPDATE loans SET status = 'cancelled', closed_at = $1, note = COALESCE(note, 'cavab vaxtı bitdi') WHERE id = $2 AND status = 'requested' AND respond_by < $1`, [t, l.id]);
+        if (st.changes !== 1) return null;
+        const ctx = { q, notify: [] };
+        await this.notifyIn(ctx, Number(l.borrower_id), 'loan', `⌛ ${l.lender_name} borc istəyinizə (${money(Number(l.amount))}) vaxtında cavab vermədi — istək ləğv olundu.`);
+        await this.notifyIn(ctx, Number(l.lender_id), 'loan_ask', `⌛ ${l.borrower_name}-in borc istəyi (${money(Number(l.amount))}) cavabsız qaldı və ləğv olundu.`);
+        return { loanId: Number(l.id), lenderId: Number(l.lender_id), borrowerId: Number(l.borrower_id), notify: ctx.notify };
+      });
+      if (r) out.push(r);
+    }
+    return out;
   }
 
   async withdrawLoanRequest(borrowerId, loanId, key) {
@@ -594,6 +622,122 @@ export class Finance {
       `SELECT l.*, a.display_name AS lender_name, b.display_name AS borrower_name FROM loans l
        JOIN users a ON a.id = l.lender_id JOIN users b ON b.id = l.borrower_id
        WHERE (l.lender_id = $1 OR l.borrower_id = $1) ORDER BY l.id DESC LIMIT 200`, [userId]);
+  }
+
+  // ---------- admin: bütün oyunçuların balansı (toplu) ----------
+  // Hədəf: rolu "player" olan AKTİV (approved) hesablar. Admin/moderator hesabları daxil deyil.
+  // Oyun tarixçəsi, raund nəticələri, dərəcələr, borclar və kredit borcu DƏYİŞMİR — yalnız cari virtual balans.
+  async bulkPreview(op, amount) {
+    const rows = await this.db.all(`SELECT id, balance FROM users WHERE role = 'player' AND status = 'approved'`);
+    if (op === 'reset') {
+      const hit = rows.filter((r) => Number(r.balance) !== 0);
+      return { op, affected: hit.length, total: hit.reduce((a, r) => a + Number(r.balance), 0), players: rows.length };
+    }
+    if (op === 'grant') {
+      const a = amountOf(amount);
+      return { op, amount: a, affected: rows.length, total: a * rows.length, players: rows.length };
+    }
+    throw new UserError('Naməlum əməliyyat.');
+  }
+
+  /** Bir tranzaksiyada icra olunur (ya hamısı, ya heç biri). expectCount: adminin ön baxışda gördüyü say (ikinci təsdiq). */
+  async adminBulk(adminId, op, amount, expectCount, key, t = now()) {
+    if (op !== 'reset' && op !== 'grant') throw new UserError('Naməlum əməliyyat.');
+    const a = op === 'grant' ? amountOf(amount) : 0;
+    return this.op(key, adminId, `bulk-${op}`, async (ctx) => {
+      const admin = await ctx.q.get(`SELECT id, role, status, display_name FROM users WHERE id = $1`, [adminId]);
+      if (!admin || admin.role !== 'admin' || admin.status !== 'approved') throw new UserError('Bu əməliyyatı yalnız admin edə bilər.');
+      const rows = await ctx.q.all(`SELECT id, balance FROM users WHERE role = 'player' AND status = 'approved' ORDER BY id`);
+      const targets = op === 'reset' ? rows.filter((r) => Number(r.balance) !== 0) : rows;
+      if (Number(expectCount) !== targets.length) throw new UserError(`Siyahı dəyişib: indi ${targets.length} hesab təsirlənəcək. Yenidən baxıb təsdiqləyin.`);
+      let total = 0;
+      for (const r of targets) {
+        const before = Number(r.balance);
+        const delta = op === 'reset' ? -before : a;
+        const row = await ctx.q.get('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [delta, r.id]);
+        const bal = Number(row.balance);
+        total += delta;
+        ctx.changes.push({ userId: Number(r.id), delta, balance: bal });
+        await this.journal(ctx, { userId: Number(r.id), delta, balance: bal, kind: 'admin_bulk', by: adminId,
+          reason: op === 'reset' ? `Admin: bütün balanslar sıfırlandı (${before} → 0)` : `Admin: bütün oyunçulara ${a} xal` });
+        await this.notifyIn(ctx, Number(r.id), 'admin', op === 'reset' ? `Admin bütün oyunçuların balansını sıfırladı. Balansınız: 0 xal. Dərəcəniz və oyun tarixçəniz qalır.` : `Admin bütün oyunçulara ${a} xal verdi. Balansınız: ${bal} xal.`);
+      }
+      await ctx.q.run('INSERT INTO admin_log(admin_id, action, amount, affected, details, created_at) VALUES($1, $2, $3, $4, $5, $6)',
+        [adminId, op === 'reset' ? 'bulk_reset' : 'bulk_grant', op === 'reset' ? null : a, targets.length, JSON.stringify({ total }), t]);
+      return { op, amount: a, affected: targets.length, total };
+    });
+  }
+
+  async adminLog(limit = 100) {
+    const rows = await this.db.all(`SELECT l.*, u.display_name AS admin_name FROM admin_log l LEFT JOIN users u ON u.id = l.admin_id ORDER BY l.id DESC LIMIT $1`, [limit]);
+    return rows.map((r) => ({ id: Number(r.id), adminId: Number(r.admin_id), adminName: r.admin_name, action: r.action, amount: r.amount == null ? null : Number(r.amount), affected: Number(r.affected), details: r.details, createdAt: Number(r.created_at) }));
+  }
+
+  // ---------- oyundaxili market (yalnız virtual xal; əşyalar oyuna heç bir üstünlük vermir) ----------
+  async shopItems(onlyActive = true) {
+    const rows = await this.db.all(`SELECT id, name, price, active, sort, image_ver, (image IS NOT NULL) AS has_image FROM shop_items ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`);
+    return rows.map((r) => ({ id: r.id, name: r.name, price: Number(r.price), active: Number(r.active) === 1, imageVer: Number(r.image_ver || 0), hasImage: !!Number(r.has_image) || r.has_image === true }));
+  }
+  async collection(userId) {
+    const rows = await this.db.all(`SELECT ui.item_id, ui.acquired_at, ui.price_paid, ui.uses, si.name, si.image_ver, (si.image IS NOT NULL) AS has_image
+      FROM user_items ui LEFT JOIN shop_items si ON si.id = ui.item_id WHERE ui.user_id = $1 ORDER BY ui.acquired_at`, [userId]);
+    return rows.map((r) => ({ id: r.item_id, name: r.name || r.item_id, acquiredAt: Number(r.acquired_at), pricePaid: Number(r.price_paid), uses: Number(r.uses), imageVer: Number(r.image_ver || 0), hasImage: !!Number(r.has_image) || r.has_image === true }));
+  }
+  /** Alış: qiymət və aktivlik serverdə oxunur (klientin göndərdiyi qiymətə baxılmır); balans şərtli UPDATE ilə çıxılır;
+   *  eyni açar ikinci dəfə heç nə etmir; artıq kolleksiyada olan əşya yenidən alınmır. */
+  async buyItem(userId, itemId, key, t = now()) {
+    return this.op(key, userId, 'shop-buy', async (ctx) => {
+      const it = await ctx.q.get('SELECT id, name, price, active FROM shop_items WHERE id = $1', [String(itemId ?? '')]);
+      if (!it) throw new UserError('Əşya tapılmadı.');
+      if (Number(it.active) !== 1) throw new UserError('Bu əşya hazırda satışda deyil.');
+      const u = await this.activeUser(ctx.q, userId);
+      const own = await ctx.q.get('SELECT 1 AS x FROM user_items WHERE user_id = $1 AND item_id = $2', [userId, it.id]);
+      if (own) throw new UserError('Bu əşya artıq kolleksiyanızdadır.');
+      const price = Number(it.price);
+      const bal = await this.debit(ctx, userId, price, `Balansınız çatmır: «${it.name}» ${price} xal, balansınız ${u.balance} xal.`);
+      await ctx.q.run('INSERT INTO user_items(user_id, item_id, acquired_at, price_paid, uses) VALUES($1, $2, $3, $4, 0)', [userId, it.id, t, price]);
+      await ctx.q.run('INSERT INTO shop_purchases(user_id, item_id, item_name, price, op_key, created_at) VALUES($1, $2, $3, $4, $5, $6)', [userId, it.id, it.name, price, ctx.key, t]);
+      await this.journal(ctx, { userId, delta: -price, balance: bal, kind: 'shop', reason: `Market: «${it.name}» (virtual əşya)` });
+      return { itemId: it.id, name: it.name, price, balance: bal };
+    });
+  }
+  async useItem(userId, itemId) {
+    const r = await this.db.get(`SELECT ui.item_id, si.name, si.image_ver FROM user_items ui LEFT JOIN shop_items si ON si.id = ui.item_id WHERE ui.user_id = $1 AND ui.item_id = $2`, [userId, String(itemId ?? '')]);
+    if (!r) throw new UserError('Bu əşya kolleksiyanızda yoxdur.');
+    await this.db.run('UPDATE user_items SET uses = uses + 1 WHERE user_id = $1 AND item_id = $2', [userId, r.item_id]);
+    return { itemId: r.item_id, name: r.name || r.item_id, imageVer: Number(r.image_ver || 0) };
+  }
+  async setShopItem(id, { name, price, active } = {}) {
+    const it = await this.db.get('SELECT id FROM shop_items WHERE id = $1', [String(id)]);
+    if (!it) throw new UserError('Əşya tapılmadı.');
+    if (name !== undefined) {
+      const n = String(name).trim().replace(/\s+/g, ' ');
+      if (n.length < 2 || n.length > 30) throw new UserError('Ad 2–30 simvol olmalıdır.');
+      await this.db.run('UPDATE shop_items SET name = $1 WHERE id = $2', [n, it.id]);
+    }
+    if (price !== undefined) {
+      const p = Number(price);
+      if (!Number.isInteger(p) || p < 1 || p > MAX_AMOUNT) throw new UserError('Qiymət müsbət tam ədəd olmalıdır.');
+      await this.db.run('UPDATE shop_items SET price = $1 WHERE id = $2', [p, it.id]);
+    }
+    if (active !== undefined) await this.db.run('UPDATE shop_items SET active = $1 WHERE id = $2', [active ? 1 : 0, it.id]);
+    return (await this.shopItems(false)).find((x) => x.id === it.id);
+  }
+  async setShopImage(id, buf) {
+    const r = await this.db.get('UPDATE shop_items SET image = $1, image_ver = image_ver + 1 WHERE id = $2 RETURNING image_ver', [buf, String(id)]);
+    if (!r) throw new UserError('Əşya tapılmadı.');
+    return Number(r.image_ver);
+  }
+  async getShopImage(id) {
+    const r = await this.db.get('SELECT image FROM shop_items WHERE id = $1', [String(id)]);
+    let a = r?.image;
+    if (!a) return null;
+    if (typeof a === 'string' && a.startsWith('\\x')) a = Buffer.from(a.slice(2), 'hex');
+    return Buffer.from(a);
+  }
+  async shopStats() {
+    const rows = await this.db.all('SELECT item_id, COUNT(*) AS n, COALESCE(SUM(price), 0) AS total FROM shop_purchases GROUP BY item_id');
+    return Object.fromEntries(rows.map((r) => [r.item_id, { sold: Number(r.n), total: Number(r.total) }]));
   }
 
   /** Masada göstərilən gözləyən borc təklifləri/istəkləri (yalnız mənə aid olanlar) */

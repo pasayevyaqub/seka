@@ -179,33 +179,89 @@ const CROWN = `<svg viewBox="0 0 120 90" class="crown-svg">
   <path d="M60 30 l5 9 l-5 9 l-5 -9 z" fill="#2fbf71" stroke="#0e4d2c" stroke-width="1.5"/>
   <path d="M20 40 Q40 52 60 48 Q80 52 100 40" fill="none" stroke="#fff6c8" stroke-opacity=".7" stroke-width="2"/>
 </svg>`;
+// "Masa kralı" (v3.0, konsept şəkil əsasında): dörd kart (♥ ♦ ♣ ♠) yelpik kimi açılıb fırlanır → nişanlardan
+// qızılı işıq izləri yuxarı axır və tac formalaşır → tac alanın avatarına uçur → xırda qızılı xallar səpələnir.
+// ~3,6 san. Yalnız transform/opacity/stroke-dashoffset (GPU) — zəif telefonda da yüngül. #fx qatı toxunuşları buraxır.
 async function tableKing(ev) {
-  const b = anchorOf(ev.toId);
-  if (!b) return wait(300);
-  const host = mk('gift-fx');
+  const c = tableCenter();
+  const b = anchorOf(ev.toId) || { x: c.x, y: c.y + 120, w: 50 };
+  const lite = weakDevice();
+  const host = mk('gift-fx king-fx');
   layer().appendChild(host);
-  const size = Math.max(54, b.w * 1.15);
-  const halo = mk('gf-halo');
-  halo.style.left = `${b.x}px`; halo.style.top = `${b.y}px`; halo.style.width = halo.style.height = `${b.w * 1.7}px`;
-  host.appendChild(halo);
-  const crown = mk('gf-crown', CROWN + '<i class="spark s1"></i><i class="spark s2"></i><i class="spark s3"></i><i class="spark s4"></i>');
-  crown.style.width = `${size}px`;
-  crown.style.left = `${b.x}px`; crown.style.top = `${b.y - b.w * 0.55}px`;
+  const CW = Math.max(46, Math.min(74, innerWidth * 0.15)); // kart eni
+  const T = 3600;
+  const A = (el, kf, o = {}) => el.animate(kf, { duration: T, fill: 'both', ...o });
+  const anims = [];
+  // ad sətri: kim → kimə
+  const cap = mk('kg-cap', `<b>${esc(ev.fromName)}</b> → <b>${esc(ev.toName)}</b> · ${esc(ev.giftName)}`);
+  cap.style.left = `${c.x}px`; cap.style.top = `${Math.max(70, c.y - CW * 2.9)}px`;
+  host.appendChild(cap);
+  anims.push(A(cap, [{ opacity: 0, transform: 'translate(-50%, 6px)' }, { opacity: 1, transform: 'translate(-50%, 0)', offset: 0.08 }, { opacity: 1, offset: 0.85 }, { opacity: 0 }]));
+  // işıq dairəsi
+  const glow = mk('kg-glow'); glow.style.left = `${c.x}px`; glow.style.top = `${c.y}px`; glow.style.width = glow.style.height = `${CW * 5}px`;
+  host.appendChild(glow);
+  anims.push(A(glow, [{ opacity: 0, transform: 'translate(-50%,-50%) scale(.4)' }, { opacity: 0.9, transform: 'translate(-50%,-50%) scale(1)', offset: 0.3 }, { opacity: 0.6, offset: 0.55 }, { opacity: 0, transform: 'translate(-50%,-50%) scale(1.2)', offset: 0.75 }, { opacity: 0 }]));
+  // 1) kartlar: ortada yığın → yelpik → fırlanma → nişanlardan işıq çıxanda solur
+  const suits = ['H', 'D', 'C', 'S'];
+  const fanAng = [-36, -12, 12, 36];
+  const crownPt = { x: c.x, y: c.y - CW * 1.9 };
+  suits.forEach((su, k) => {
+    const card = mk('kg-card', cardSVG({ r: 'T', s: su }));
+    card.style.width = `${CW}px`; card.style.left = `${c.x}px`; card.style.top = `${c.y}px`;
+    host.appendChild(card);
+    const a = fanAng[k];
+    const dx = Math.sin((a * Math.PI) / 180) * CW * 1.55; const dy = -Math.cos((a * Math.PI) / 180) * CW * 0.9;
+    anims.push(A(card, [
+      { transform: 'translate(-50%,-50%) scale(.3) rotate(0deg)', opacity: 0 },
+      { transform: 'translate(-50%,-50%) scale(.8) rotate(0deg)', opacity: 1, offset: 0.06 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${a}deg) scale(1)`, offset: 0.2, easing: 'ease-in-out' },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${a}deg) rotateY(360deg) scale(1)`, offset: 0.36 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy - 8}px)) rotate(${a}deg) scale(1.03)`, opacity: 1, offset: 0.46 },
+      { transform: `translate(calc(-50% + ${dx * 1.15}px), calc(-50% + ${dy + 10}px)) rotate(${a * 1.2}deg) scale(.85)`, opacity: 0, offset: 0.62 },
+      { opacity: 0 },
+    ]));
+    // 2) işıq izi: kartın nişanından tacın yerinə doğru qıvrılan qızılı xətt
+    if (!lite || k % 2 === 0) {
+      const sx = c.x + dx; const sy = c.y + dy;
+      const mx = (sx + crownPt.x) / 2 + (k < 2 ? -1 : 1) * CW * 0.6; const my = Math.min(sy, crownPt.y) - CW * 0.35;
+      const minX = Math.min(sx, crownPt.x, mx) - 10; const minY = Math.min(sy, crownPt.y, my) - 10;
+      const w = Math.max(sx, crownPt.x, mx) - minX + 20; const h = Math.max(sy, crownPt.y, my) - minY + 20;
+      const svg = mk('kg-trail', `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${sx - minX} ${sy - minY} Q${mx - minX} ${my - minY} ${crownPt.x - minX} ${crownPt.y - minY}" pathLength="100" fill="none" stroke="url(#kgT)" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="100"/><defs><linearGradient id="kgT"><stop offset="0" stop-color="#fff3c0"/><stop offset="1" stop-color="#f2b53a"/></linearGradient></defs></svg>`);
+      svg.style.left = `${minX}px`; svg.style.top = `${minY}px`;
+      host.appendChild(svg);
+      const path = svg.querySelector('path');
+      anims.push(A(path, [{ strokeDashoffset: 100, opacity: 0 }, { strokeDashoffset: 100, opacity: 1, offset: 0.34 }, { strokeDashoffset: 0, opacity: 1, offset: 0.5 }, { strokeDashoffset: -100, opacity: 0, offset: 0.66 }, { strokeDashoffset: -100, opacity: 0 }]));
+    }
+  });
+  // 3) tac: işıqlardan formalaşır → parlayır → alanın avatarına uçur
+  const size = Math.max(64, CW * 1.5);
+  const crown = mk('kg-crown', CROWN);
+  crown.style.width = `${size}px`; crown.style.left = `${crownPt.x}px`; crown.style.top = `${crownPt.y}px`;
   host.appendChild(crown);
-  const a1 = crown.animate([
-    { transform: 'translate(-50%,-100%) translateY(-140px) scale(.6) rotate(-12deg)', opacity: 0 },
-    { transform: 'translate(-50%,-100%) translateY(6px) scale(1.05) rotate(3deg)', opacity: 1, offset: 0.17 },
-    { transform: 'translate(-50%,-100%) translateY(0) scale(1) rotate(0)', opacity: 1, offset: 0.22 },
-    { transform: 'translate(-50%,-100%) translateY(0) scale(1) rotate(0)', opacity: 1, offset: 0.86 },
-    { transform: 'translate(-50%,-100%) translateY(-60px) scale(.8)', opacity: 0 },
-  ], { duration: 3800, easing: 'ease-in-out', fill: 'both' });
-  const a2 = halo.animate([
-    { transform: 'translate(-50%,-50%) scale(.4)', opacity: 0 },
-    { transform: 'translate(-50%,-50%) scale(1)', opacity: 1, offset: 0.22 },
-    { transform: 'translate(-50%,-50%) scale(1.1)', opacity: 0.8, offset: 0.6 },
-    { transform: 'translate(-50%,-50%) scale(1.25)', opacity: 0 },
-  ], { duration: 3800, easing: 'ease-out', fill: 'both' });
-  await Promise.all([finished(a1), finished(a2)]);
+  const tx = b.x - crownPt.x; const ty = b.y - b.w * 0.55 - crownPt.y;
+  anims.push(A(crown, [
+    { transform: 'translate(-50%,-50%) scale(.2)', opacity: 0 },
+    { transform: 'translate(-50%,-50%) scale(.2)', opacity: 0, offset: 0.44 },
+    { transform: 'translate(-50%,-50%) scale(1.15)', opacity: 1, offset: 0.54, easing: 'ease-out' },
+    { transform: 'translate(-50%,-50%) scale(1)', opacity: 1, offset: 0.62, easing: 'cubic-bezier(.5,0,.3,1)' },
+    { transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${Math.max(0.45, (b.w * 1.1) / size)})`, opacity: 1, offset: 0.8 },
+    { transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${Math.max(0.45, (b.w * 1.1) / size)})`, opacity: 1, offset: 0.92 },
+    { transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty - 20}px)) scale(.4)`, opacity: 0 },
+  ]));
+  // 4) xırda qızılı xallar alanın avatarından səpələnir
+  const N = lite ? 6 : 12;
+  for (let k = 0; k < N; k++) {
+    const coin = mk('kg-coin');
+    coin.style.left = `${b.x}px`; coin.style.top = `${b.y}px`;
+    host.appendChild(coin);
+    const ang = (k / N) * Math.PI * 2 + Math.random() * 0.4; const rad = b.w * (0.9 + Math.random() * 0.9);
+    anims.push(A(coin, [
+      { transform: 'translate(-50%,-50%) scale(.2)', opacity: 0 }, { transform: 'translate(-50%,-50%) scale(.2)', opacity: 0, offset: 0.78 },
+      { transform: `translate(calc(-50% + ${Math.cos(ang) * rad * 0.6}px), calc(-50% + ${Math.sin(ang) * rad * 0.6 - 18}px)) scale(1) rotateY(180deg)`, opacity: 1, offset: 0.88 },
+      { transform: `translate(calc(-50% + ${Math.cos(ang) * rad}px), calc(-50% + ${Math.sin(ang) * rad + 14}px)) scale(.7) rotateY(360deg)`, opacity: 0 },
+    ]));
+  }
+  await Promise.all(anims.map(finished));
   host.remove();
 }
 

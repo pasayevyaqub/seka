@@ -33,6 +33,7 @@ export function decide(view, botId, mem, now) {
   const s = me?.score ?? 0;
 
   if (view.phase === 'offer' && view.pending?.to === botId) {
+    if (view.pending.kind === 'any') return { type: 'offerReply', choice: s < 18 ? 'split' : s < 24 ? 'seka' : 'no' };
     if (view.pending.kind === 'split') return { type: s < 24 ? 'offerAccept' : 'offerDecline' };
     return { type: s < 21 ? 'offerAccept' : 'offerDecline' };
   }
@@ -42,6 +43,10 @@ export function decide(view, botId, mem, now) {
   if (view.phase === 'tieDecision' && (view.pending?.a === botId || view.pending?.b === botId)) {
     if (view.pending.voted?.includes(botId)) return null;
     return { type: 'tieVote', choice: rnd() < 0.5 ? 'seka' : 'bol' };
+  }
+  if (view.phase === 'sekaChoice' && (view.pending?.a === botId || view.pending?.b === botId)) {
+    if (view.pending.voted?.includes(botId)) return null;
+    return { type: 'sekaChoice', choice: rnd() < 0.5 ? 'keep' : 'split' };
   }
   if (view.phase === 'sekaJoin') {
     const sj = view.sekaJoin;
@@ -77,7 +82,7 @@ export function decide(view, botId, mem, now) {
   const two = view.activeCount === 2;
 
   if (two && me.canOffer && mem.turns >= 3 && s >= 18 && s <= 25 && rnd() < 0.2) {
-    return { type: rnd() < 0.5 ? 'offerSplit' : 'offerSeka' };
+    return { type: 'offerAny' };
   }
   if (s >= 31) {
     if (me.canBaxis && mem.turns >= 4) return { type: 'baxis' };

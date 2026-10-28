@@ -46,17 +46,71 @@ const isAdmin = (u) => u && u.status === 'approved' && u.role === 'admin';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
-export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secure = process.env.NODE_ENV === 'production', botDelay, retryFast, retrySlow, adminUser = process.env.ADMIN_USERNAME || 'admin', adminPass = process.env.ADMIN_PASSWORD || 'admin123', limits = { register: 5, login: 10 }, debtIntervalMs = 30_000 } = {}) {
+// masada borc istəyi: borc verən bu müddətdə cavab verməsə istək avtomatik ləğv olunur
+export const LOAN_ASK_MS = 10_000;
+
+export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secure = process.env.NODE_ENV === 'production', botDelay, retryFast, retrySlow, adminUser = process.env.ADMIN_USERNAME || 'admin', adminPass = process.env.ADMIN_PASSWORD || 'admin123', limits = { register: 5, login: 10 }, debtIntervalMs = 30_000, consentMs, loanAskMs = LOAN_ASK_MS } = {}) {
   const db = await openDb({ url: dbUrl, file: dbFile });
   const store = new Store(db);
   await store.ensureAdmin(adminUser, adminPass);
   await store.recoverActiveRounds();
-  const rooms = new RoomManager(store, { botDelay, retryFast, retrySlow });
-  const voiceActive = new Set();
+  const rooms = new RoomManager(store, { botDelay, retryFast, retrySlow, consentMs });
+  // Səsli danışıq: kim səsə qoşulub (userId → { muted }). Media WebRTC ilə birbaşa gedir, server yalnız siqnalı ötürür.
+  const voiceActive = new Map();
+  const voiceToRoom = (room, userId, payload) => { for (const id of room.members.keys()) if (id !== userId && id > 0) rooms.send(id, { t: 'voiceState', userId, ...payload }); };
+  // otaqdakı aktiv səs iştirakçılarını bir istifadəçiyə göndər (otağa girəndə, səsi açanda, yenidən qoşulanda)
+  const voiceSnapshot = (userId) => {
+    const room = rooms.roomOfOrNull(userId);
+    if (!room) return;
+    for (const [id, st] of voiceActive) if (id !== userId && room.members.has(id)) rooms.send(userId, { t: 'voiceState', userId: id, enabled: true, muted: !!st.muted });
+  };
+  const voiceOff = (userId) => {
+    if (!voiceActive.delete(userId)) return;
+    const room = rooms.roomOfOrNull(userId);
+    if (room) voiceToRoom(room, userId, { enabled: false, muted: false });
+  };
+  // TURN: 1) Cloudflare Realtime TURN (CF_TURN_KEY_ID + CF_TURN_API_TOKEN) — qısamüddətli parolu server API-dən alır;
+  // 2) öz coturn serveri (TURN_URLS + TURN_SHARED_SECRET, "TURN REST" HMAC); 3) heç biri yoxdursa yalnız STUN.
+  // Gizli açarlar yalnız serverdə qalır, brauzerə yalnız müddətli istifadəçi adı/parol gedir.
+  async function iceFor(userId, roomCode) {
+    const stun = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+    if (process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) {
+      try {
+        const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 5000);
+        const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(process.env.CF_TURN_KEY_ID)}/credentials/generate-ice-servers`, {
+          method: 'POST', signal: ctl.signal,
+          headers: { Authorization: `Bearer ${process.env.CF_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ttl: 4 * 3600 }),
+        }).finally(() => clearTimeout(tm));
+        if (r.ok) { const d = await r.json(); if (Array.isArray(d.iceServers)) return { iceServers: d.iceServers, turn: true }; }
+        console.error('Cloudflare TURN: parol alınmadı, status', r.status);
+      } catch (e) { console.error('Cloudflare TURN: sorğu alınmadı:', e?.name || 'xəta'); }
+    }
+    const urls = String(process.env.TURN_URLS || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (urls.length && process.env.TURN_SHARED_SECRET) {
+      const username = `${Math.floor(Date.now() / 1000) + 4 * 3600}:${userId}:${roomCode}`;
+      const credential = crypto.createHmac('sha1', process.env.TURN_SHARED_SECRET).update(username).digest('base64');
+      return { iceServers: [...stun, { urls, username, credential }], turn: true };
+    }
+    return { iceServers: stun, turn: false };
+  }
   const finance = new Finance(db);
   const debts = new DebtWorker(finance, rooms, { intervalMs: debtIntervalMs });
   rooms.onBalanceUp = (id) => debts.kick(id);
   debts.scan(); // açılışda vaxtı keçmiş borcları yoxla (server yatıbsa)
+
+  // masa borc istəklərinin 10 saniyəlik cavab müddəti: hər istək üçün bir taymer + açılışda bir dəfə yoxlama
+  // (dövri sorğu yoxdur — Neon bazası boş vaxtı yata bilsin)
+  const loanTimers = new Set();
+  async function expireLoanAsks() {
+    try {
+      for (const r of await finance.expireLoanRequests()) {
+        pushNotify(r);
+        for (const id of [r.lenderId, r.borrowerId]) rooms.send(id, { t: 'loanAskDone', id: r.loanId, status: 'expired' });
+      }
+    } catch (e) { console.error('Borc istəyi müddəti yoxlanmadı:', e?.message || e); }
+  }
+  expireLoanAsks();
 
   const sessionCookie = (token, maxAge) =>
     `${COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
@@ -118,6 +172,17 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     return sharp(buf, { failOn: 'error' }).rotate().resize(256, 256, { fit: 'cover' }).webp({ quality: 80 }).toBuffer();
   }
 
+  // market əşyasının şəkli: şəffaflıq qalır, 256×256-ya sığışdırılır, metadata atılır
+  async function processItemImage(buf) {
+    let sharp;
+    try { sharp = (await import('sharp')).default; } catch { throw new UserError('Şəkil emalı serverdə mövcud deyil (sharp paketi quraşdırılmayıb).'); }
+    let meta;
+    try { meta = await sharp(buf, { failOn: 'error', limitInputPixels: 40_000_000 }).metadata(); } catch { throw new UserError('Fayl həqiqi şəkil deyil və ya zədəlidir.'); }
+    if (!['jpeg', 'png', 'webp'].includes(meta.format)) throw new UserError('Yalnız JPG, PNG və WebP şəkillər qəbul olunur.');
+    return sharp(buf, { failOn: 'error' }).rotate().resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 82 }).toBuffer();
+  }
+  const lastItemUse = new Map();
+
   async function api(req, res, url) {
     const cookies = parseCookies(req.headers.cookie);
     const me = await store.userByToken(cookies[COOKIE]);
@@ -148,6 +213,15 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
 
     if (!me) return json(res, 401, { error: 'Daxil olun.' });
 
+    // hesab ayarları: ad, telefon, şifrə — mövcud şifrə ilə
+    if (p === '/api/me/account' && m === 'POST') {
+      if (rateLimited(me.id, 'account', 8, 10 * 60_000)) throw new UserError('Çox cəhd. 10 dəqiqə sonra yenidən yoxlayın.');
+      const b = await readBody(req);
+      const r = await store.updateOwnAccount(me.id, b, cookies[COOKIE]);
+      const pu = publicUser(r.user);
+      if (r.changed.includes('ad')) rooms.userUpdated(pu); else rooms.send(me.id, { t: 'user', user: pu });
+      return json(res, 200, { ok: true, changed: r.changed, user: pu, smsVerification: false });
+    }
     if (p === '/api/password' && m === 'POST') {
       const b = await readBody(req);
       await store.changeOwnPassword(me.id, b.oldPassword, b.newPassword);
@@ -162,19 +236,44 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       return res.end(img);
     }
 
+    const si = p.match(/^\/api\/shop\/img\/([a-z0-9_-]{1,40})$/);
+    if (si && m === 'GET') {
+      const img = await finance.getShopImage(si[1]);
+      if (!img) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(img);
+    }
+
     if (me.status !== 'approved') return json(res, 403, { error: 'Hesabınız aktiv deyil.' });
+
+    // ---- market: yalnız virtual xal, real ödəniş/sifariş/pul çıxarışı YOXDUR ----
+    if (p === '/api/shop' && m === 'GET') {
+      return json(res, 200, { items: await finance.shopItems(true), collection: await finance.collection(me.id), balance: (await store.getUser(me.id)).balance });
+    }
+    if (p === '/api/shop/buy' && m === 'POST') {
+      if (rateLimited(me.id, 'shopbuy', 20)) throw new UserError('Çox sorğu. Bir az gözləyin.');
+      const b = await readBody(req);
+      // qiymət klientdən QƏBUL EDİLMİR — server bazadakı qiyməti götürür; açar təkrar emalın qarşısını alır
+      const r = await rooms.moneyOp(me.id, () => finance.buyItem(me.id, b.itemId, b.key));
+      return json(res, 200, { ...strip(r), collection: await finance.collection(me.id) });
+    }
+    if (p === '/api/shop/use' && m === 'POST') {
+      const b = await readBody(req);
+      const t = Date.now();
+      if (t - (lastItemUse.get(me.id) || 0) < 3000) throw new UserError('Əşyanı 3 saniyədə bir istifadə etmək olar.');
+      const r = await finance.useItem(me.id, b.itemId);
+      lastItemUse.set(me.id, t);
+      const room = rooms.roomOfOrNull(me.id);
+      const ev = { userId: me.id, itemId: r.itemId, name: r.name, imageVer: r.imageVer };
+      if (room && room.members.has(me.id)) rooms.itemEvent(room, ev); else rooms.send(me.id, { t: 'itemUse', ...ev, at: t });
+      return json(res, 200, { ok: true, ...r, inRoom: !!room });
+    }
 
     if (p === '/api/voice/ice' && m === 'GET') {
       const room = rooms.roomOfOrNull(me.id);
       if (!room || !room.members.has(me.id)) return json(res, 403, { error: 'Əvvəl otağa qoşulun.' });
-      const iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
-      const urls = String(process.env.TURN_URLS || '').split(',').map(x => x.trim()).filter(Boolean);
-      if (urls.length && process.env.TURN_SHARED_SECRET) {
-        const username = `${Math.floor(Date.now() / 1000) + 15 * 60}:${me.id}:${room.code}`;
-        const credential = crypto.createHmac('sha1', process.env.TURN_SHARED_SECRET).update(username).digest('base64');
-        iceServers.push({ urls, username, credential });
-      }
-      return json(res, 200, { iceServers });
+      if (rateLimited(me.id, 'voiceice', 20)) throw new UserError('Çox sorğu. Bir az gözləyin.');
+      return json(res, 200, await iceFor(me.id, room.code));
     }
 
     if (p === '/api/me/avatar' && m === 'POST') {
@@ -196,7 +295,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     if (p === '/api/my-stats' && m === 'GET') return json(res, 200, { items: await store.pairStats(me.id) });
     if (p === '/api/profile' && m === 'GET') {
       const prof = await finance.profile(me.id);
-      return json(res, 200, { ...prof, stats: await store.pairStats(me.id), user: publicUser(await store.getUser(me.id)) });
+      return json(res, 200, { ...prof, stats: await store.pairStats(me.id), rank: await store.playerStats(me.id), collection: await finance.collection(me.id), user: publicUser(await store.getUser(me.id)) });
     }
     if (p === '/api/loans/pending' && m === 'GET') return json(res, 200, { loans: await finance.pendingLoans(me.id) });
     if (p === '/api/notifications' && m === 'GET') return json(res, 200, { items: await finance.notifications(me.id) });
@@ -255,13 +354,32 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       else if (p === '/api/credit/repay') r = await rooms.moneyOp(me.id, () => finance.repayCredit(me.id, b.amount, b.key));
       else if (p === '/api/gift') r = await rooms.moneyOp(me.id, () => finance.giftPlayer(me.id, Number(b.toId), b.amount, b.note, b.key));
       else if (p === '/api/loans/offer') r = await finance.offerLoan(me.id, Number(b.borrowerId), b.amount, Number(b.dueAt), b.note, b.key);
-      else if (p === '/api/loans/request') r = await finance.requestLoan(me.id, Number(b.lenderId), b.amount, Number(b.dueAt), b.note, b.key);
+      else if (p === '/api/loans/request') {
+        // eyni masadakı oyunçudan istək: ekranda kiçik bildiriş, 10 san cavab vaxtı
+        const myRoom = rooms.roomOfOrNull(me.id);
+        const atTable = !!myRoom && myRoom.members.has(Number(b.lenderId)) && myRoom === rooms.roomOfOrNull(Number(b.lenderId));
+        r = await finance.requestLoan(me.id, Number(b.lenderId), b.amount, Number(b.dueAt), b.note, b.key, Date.now(), atTable ? loanAskMs : null);
+        if (atTable && !r.duplicate) {
+          rooms.send(Number(b.lenderId), { t: 'loanAsk', id: r.loanId, borrowerId: me.id, borrowerName: r.borrowerName, lenderName: r.lenderName, amount: r.amount, dueAt: r.dueAt, respondBy: r.respondBy });
+          const tm = setTimeout(() => { loanTimers.delete(tm); expireLoanAsks(); }, loanAskMs + 300);
+          tm.unref?.(); loanTimers.add(tm);
+        }
+      }
       else {
         const lm = p.match(/^\/api\/loans\/(\d+)\/(accept|decline|cancel|repay|approve|reject|withdraw)$/);
         if (!lm) return json(res, 404, { error: 'Tapılmadı.' });
         const loanId = Number(lm[1]);
-        if (lm[2] === 'approve') r = await rooms.moneyOp(me.id, () => finance.approveLoanRequest(me.id, loanId, b.key)); // pul borc verəndən çıxır
-        else if (lm[2] === 'reject') r = await finance.rejectLoanRequest(me.id, loanId, b.key);
+        if (lm[2] === 'approve' || lm[2] === 'reject') {
+          try {
+            r = lm[2] === 'approve'
+              ? await rooms.moneyOp(me.id, () => finance.approveLoanRequest(me.id, loanId, b.key)) // pul borc verəndən çıxır
+              : await finance.rejectLoanRequest(me.id, loanId, b.key);
+          } catch (e) { if (/Cavab vaxtı bitib/.test(e.message)) expireLoanAsks(); throw e; }
+          // bildiriş kartı borc verənin bütün cihazlarında və borc istəyəndə dərhal bağlansın
+          const st = lm[2] === 'approve' ? 'accepted' : 'rejected';
+          rooms.send(me.id, { t: 'loanAskDone', id: loanId, status: st });
+          if (r.borrowerId) rooms.send(r.borrowerId, { t: 'loanAskDone', id: loanId, status: st });
+        }
         else if (lm[2] === 'withdraw') r = await finance.withdrawLoanRequest(me.id, loanId, b.key);
         else if (lm[2] === 'accept') {
           const loan = await db.get('SELECT lender_id FROM loans WHERE id = $1', [loanId]);
@@ -301,6 +419,51 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
       if (!isAdmin(me)) throw new UserError('Girişi yalnız admin aça/bağlaya bilər.');
       const b = await readBody(req);
       return json(res, 200, { playerLoginOpen: await finance.setPlayerLoginOpen(!!b.open) });
+    }
+    // ---- toplu balans əməliyyatları (yalnız admin) ----
+    if (p === '/api/admin/bulk/preview' && m === 'GET') {
+      if (!isAdmin(me)) throw new UserError('Bu əməliyyatı yalnız admin edə bilər.');
+      const pv = await finance.bulkPreview(url.searchParams.get('op'), url.searchParams.get('amount'));
+      return json(res, 200, { ...pv, activeRounds: rooms.anyActiveRealRound() });
+    }
+    if (p === '/api/admin/bulk' && m === 'POST') {
+      if (!isAdmin(me)) throw new UserError('Bu əməliyyatı yalnız admin edə bilər.');
+      const b = await readBody(req);
+      if (b.confirm !== true) throw new UserError('İkinci təsdiq tələb olunur.');
+      // gedən raundların yaddaşdakı balansı pozulmasın: əvvəl raundlar bitməlidir
+      if (rooms.anyActiveRealRound()) throw new UserError('Hazırda real otaqlarda raund gedir. Raundlar bitəndən sonra yenidən cəhd edin.');
+      // əməliyyat müddətində yeni real raund başlamasın (raund balansları bazadan oxunur)
+      rooms.bulkBusy = true;
+      let r;
+      try { r = await finance.adminBulk(me.id, b.op, b.amount, b.expectCount, b.key); } finally { rooms.bulkBusy = false; }
+      rooms.syncChanges(r.changes, null);
+      pushNotify(r);
+      return json(res, 200, strip(r));
+    }
+    if (p === '/api/admin/log' && m === 'GET') {
+      if (!isAdmin(me)) throw new UserError('Qeydiyyatı yalnız admin görə bilər.');
+      return json(res, 200, { items: await finance.adminLog() });
+    }
+    // ---- market idarəsi (yalnız admin): ad, qiymət, satışda/deyil, şəkil ----
+    if (p === '/api/admin/shop' && m === 'GET') {
+      if (!isAdmin(me)) throw new UserError('Marketi yalnız admin idarə edə bilər.');
+      return json(res, 200, { items: await finance.shopItems(false), stats: await finance.shopStats() });
+    }
+    const sm = p.match(/^\/api\/admin\/shop\/([a-z0-9_-]{1,40})(\/image)?$/);
+    if (sm) {
+      if (!isAdmin(me)) throw new UserError('Marketi yalnız admin idarə edə bilər.');
+      if (!sm[2] && m === 'POST') {
+        const b = await readBody(req);
+        const item = await finance.setShopItem(sm[1], { name: b.name, price: b.price, active: b.active });
+        return json(res, 200, { item });
+      }
+      if (sm[2] && m === 'POST') {
+        const raw = await readRaw(req, 3 * 1024 * 1024);
+        if (!raw.length) throw new UserError('Şəkil seçin.');
+        const imageVer = await finance.setShopImage(sm[1], await processItemImage(raw));
+        return json(res, 200, { imageVer });
+      }
+      if (sm[2] && m === 'DELETE') return json(res, 200, { imageVer: await finance.setShopImage(sm[1], null), removed: true });
     }
     if (p === '/api/admin/table-gifts' && m === 'GET') {
       return json(res, 200, { items: await finance.adminTableGifts(), gifts: await finance.giftTypes(), sharePct: await finance.giftSharePct() });
@@ -419,8 +582,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     ws.on('pong', () => { ws.isAlive = true; });
     rooms.attach(user, ws);
     ws.send(JSON.stringify({ t: 'hello', user: publicUser(user), roomCode: rooms.userRoom.get(user.id) || null }));
-    const joinedRoom = rooms.roomOfOrNull(user.id);
-    if (joinedRoom) for (const id of voiceActive) if (id !== user.id && joinedRoom.members.has(id)) rooms.send(user.id, { t: 'voiceState', userId: id, enabled: true });
+    voiceSnapshot(user.id);
 
     ws.on('message', async (raw) => {
       let msg;
@@ -436,14 +598,16 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
           case 'createRoom': rooms.create(u, msg); break;
           case 'emoji': rooms.emoji(u.id, msg.e); break;
           case 'chat': rooms.chat(u.id, msg.text); break;
-          case 'joinRoom': rooms.join(u, msg.code, msg.password); break;
-          case 'leaveRoom': {
-            const room = rooms.roomOfOrNull(u.id);
-            voiceActive.delete(u.id);
-            if (room) for (const id of room.members.keys()) if (id !== u.id && id > 0) rooms.send(id, { t: 'voiceState', userId: u.id, enabled: false });
-            rooms.leave(u.id); break;
+          case 'joinRoom': {
+            const before = rooms.roomOfOrNull(u.id);
+            if (before && before.code !== String(msg.code || '').trim().toUpperCase()) voiceOff(u.id);
+            rooms.join(u, msg.code, msg.password);
+            voiceSnapshot(u.id); // yeni otaqda kimin səsdə olduğu (🎙 nişanları)
+            break;
           }
+          case 'leaveRoom': voiceOff(u.id); rooms.leave(u.id); break;
           case 'startRound': await rooms.startRound(u.id); break;
+          case 'consent': await rooms.consentAnswer(u.id, msg.yes === true); break;
           case 'settings': rooms.updateSettings(u.id, msg.settings); break;
           case 'roomMeta': rooms.updateMeta(u.id, msg.meta); break;
           case 'addBot': rooms.addBot(u.id); break;
@@ -453,16 +617,20 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
           case 'look': await rooms.look(u.id); break;
           case 'voiceState': {
             const room = rooms.roomOfOrNull(u.id);
-            if (!room || !room.members.has(u.id) || room.members.get(u.id)?.isBot) break;
-            if (msg.enabled === true) voiceActive.add(u.id); else voiceActive.delete(u.id);
-            for (const id of room.members.keys()) if (id !== u.id && id > 0) rooms.send(id, { t: 'voiceState', userId: u.id, enabled: msg.enabled === true });
+            if (msg.enabled !== true || !room || !room.members.has(u.id)) { voiceOff(u.id); break; }
+            const muted = msg.muted === true;
+            const fresh = !voiceActive.has(u.id) || msg.restart === true;
+            voiceActive.set(u.id, { muted });
+            // restart: klient yenidən qoşulub və ya səsi yenidən açıb — digərləri köhnə bağlantını bağlayıb yenisini qurur
+            voiceToRoom(room, u.id, { enabled: true, muted, restart: fresh });
+            if (fresh) voiceSnapshot(u.id);
             break;
           }
           case 'voiceSignal': {
             const room = rooms.roomOfOrNull(u.id);
             const target = Number(msg.to);
             if (!room || !room.members.has(u.id) || !room.members.has(target) || target <= 0 || !voiceActive.has(u.id) || !voiceActive.has(target)) break;
-            if (!msg.signal || typeof msg.signal !== 'object' || Array.isArray(msg.signal)) break;
+            if (!msg.signal || typeof msg.signal !== 'object' || Array.isArray(msg.signal) || JSON.stringify(msg.signal).length > 12_000) break;
             rooms.send(target, { t: 'voiceSignal', fromId: u.id, signal: msg.signal });
             break;
           }
@@ -475,10 +643,8 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     });
     ws.on('close', () => {
       rooms.detach(user, ws);
-      if (voiceActive.delete(user.id)) {
-        const room = rooms.roomOfOrNull(user.id);
-        if (room) for (const id of room.members.keys()) if (id !== user.id && id > 0) rooms.send(id, { t: 'voiceState', userId: user.id, enabled: false });
-      }
+      // istifadəçinin başqa açıq bağlantısı (məs. ikinci vərəq) qalmayıbsa səsdən çıxarılır; qayıdanda klient özü yenidən elan edir
+      if (!rooms.sockets.has(user.id)) voiceOff(user.id);
     });
   }
 
@@ -502,6 +668,7 @@ export async function createApp({ dbUrl = process.env.DATABASE_URL, dbFile, secu
     async close() {
       clearInterval(ping);
       clearInterval(prune);
+      for (const tm of loanTimers) clearTimeout(tm);
       debts.stop();
       rooms.stop();
       for (const ws of wss.clients) ws.terminate();

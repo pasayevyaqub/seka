@@ -2,6 +2,7 @@
 import { S, esc, fmt, fmtCents, money, api, toast, moneyCall, avatarHTML, txList, fmtDate, azLower, isAdmin, LOAN_STATUS } from './core.js';
 import { STATS_NOTE } from './profile.js';
 import { morph } from './morph.js';
+import { itemIconHTML } from './items.js';
 
 const PAGE = 50;
 const A = () => S.admin;
@@ -16,7 +17,9 @@ export async function loadAdmin(rerenderList) {
     if (tab === 'loans') jobs.push(api('/api/admin/loans').then((r) => { A().loans = r.loans; }));
     if (tab === 'gifts') jobs.push(api('/api/admin/gifts').then((r) => { A().gifts = r.items; }));
     if (tab === 'tgifts') jobs.push(api('/api/admin/table-gifts').then((r) => { A().tgifts = r; }));
+    if (tab === 'shop' && isAdmin()) jobs.push(api('/api/admin/shop').then((r) => { A().shop = r; }));
     if (tab === 'settings') jobs.push(api('/api/admin/settings').then((r) => { A().settings = r; }));
+    if (tab === 'settings' && isAdmin()) jobs.push(api('/api/admin/log').then((r) => { A().log = r.items; }).catch(() => {}));
     await Promise.all(jobs);
     rerenderList();
   } catch (e) { toast(e.message); }
@@ -148,6 +151,48 @@ export function tgiftSettingsHTML() {
   </form>`;
 }
 
+// Market (yalnız admin): ad, qiymət, satışda olub-olmaması, şəkil. Qiymət dəyişikliyi yalnız sonrakı alışlara aiddir.
+function shopAdminHTML() {
+  const d = A().shop;
+  if (!isAdmin()) return '<p class="muted">Marketi yalnız admin idarə edə bilər.</p>';
+  if (!d) return '<p class="muted">Yüklənir…</p>';
+  return `<p class="muted" style="font-size:12.5px">Əşyalar yalnız virtual oyun xalı ilə alınır; real məhsul, real ödəniş və pul çıxarışı yoxdur. Əşyalar oyuna heç bir üstünlük vermir. Yeni qiymət yalnız bundan sonrakı alışlara tətbiq olunur — artıq alınmış əşyalar oyunçularda qalır.</p>`
+    + d.items.map((it) => {
+      const st = d.stats?.[it.id];
+      return `<div class="user-card shop-admin ${it.active ? '' : 'blocked'}" data-key="shop-${esc(it.id)}">
+      <form data-form="shopItem" data-id="${esc(it.id)}" data-keep-dirty autocomplete="off">
+        <div class="row" style="align-items:center;gap:10px">
+          <div class="shop-ico admin">${itemIconHTML(it)}</div>
+          <div style="flex:1"><label>Ad</label><input name="name" maxlength="30" value="${esc(it.name)}" required></div>
+        </div>
+        <div class="row" style="align-items:flex-end">
+          <div><label>Qiymət (xal)</label><input name="price" type="number" inputmode="numeric" min="1" step="1" value="${it.price}" required></div>
+          <label class="check" style="flex:0 0 auto;margin-bottom:10px"><input type="checkbox" name="active" ${it.active ? 'checked' : ''}> Satışda</label>
+        </div>
+        <div class="muted" style="font-size:12px">Kod: ${esc(it.id)} · Satılıb: ${st?.sold || 0} · Cəmi: ${fmt(st?.total || 0)}</div>
+        <div class="row mt" style="flex-wrap:wrap;gap:6px">
+          <button class="btn small primary" style="flex:0 0 auto">Yadda saxla</button>
+          <label class="btn small file-btn" style="flex:0 0 auto">🖼 Şəkil yüklə<input type="file" name="file" accept="image/jpeg,image/png,image/webp" hidden></label>
+          ${it.hasImage ? `<button type="button" class="btn small red" style="flex:0 0 auto" data-a="shopImgReset" data-id="${esc(it.id)}">Standart şəklə qaytar</button>` : ''}
+        </div>
+      </form></div>`;
+    }).join('') + '<p class="muted" style="font-size:12px">Şəkil: JPG, PNG və ya WebP, ən çox 3 MB. Serverdə 256×256-ya sığışdırılır, şəffaflıq qalır, metadata silinir.</p>';
+}
+
+/** Admin: əşya şəklini yükləyir (fayl serverdə yoxlanılır və emal olunur) */
+export async function uploadShopImage(id, file, reload) {
+  if (!file) return;
+  if (file.size > 3 * 1024 * 1024) return toast('Fayl 3 MB-dan böyükdür.');
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return toast('Yalnız JPG, PNG və ya WebP.');
+  try {
+    const res = await fetch(`/api/admin/shop/${encodeURIComponent(id)}/image`, { method: 'POST', body: file, headers: { 'Content-Type': file.type }, credentials: 'same-origin' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Yüklənmədi.');
+    toast('Şəkil yeniləndi.', true);
+    reload();
+  } catch (e) { toast(e.message); }
+}
+
 export function adminListHTML() {
   switch (S.adminTab) {
     case 'users': return usersList();
@@ -155,6 +200,7 @@ export function adminListHTML() {
     case 'loans': return loansList();
     case 'gifts': return giftsList();
     case 'tgifts': return tgiftsList();
+    case 'shop': return shopAdminHTML();
     case 'tx': {
       const who = A().txUser ? A().users.find((u) => u.id === A().txUser) : null;
       return `${who ? `<div class="row" style="margin-bottom:8px"><b>${esc(who.displayName)}</b><button class="btn small" style="flex:0 0 auto" data-a="txAll">Hamısı</button></div>` : ''}${txList(A().tx.filter((t) => match(azLower(A().q).trim(), t.user_name, t.reason)), true)}`;
@@ -180,6 +226,20 @@ export function adminListHTML() {
         <button class="btn ${A().settings?.playerLoginOpen === false ? 'green' : 'red'}" data-a="loginSwitch" data-v="${A().settings?.playerLoginOpen === false ? '1' : '0'}">${A().settings?.playerLoginOpen === false ? 'Oyunçu girişini aç' : 'Oyunçu girişini bağla'}</button>
         <p class="muted" style="font-size:12px">Açıq: aktiv hesablar istifadəçi adı və şifrə ilə daxil olur. Bağlı: adi oyunçuların YENİ girişləri dayanır. Admin girişi həmişə işləyir, açıq qeydiyyat hər iki rejimdə bağlıdır. Bağlamaq artıq daxil olmuş oyunçuları çıxarmır — kimisə dərhal çıxarmaq üçün həmin hesabı bloklayın (bloklananda onun sessiyaları və bağlantıları dərhal kəsilir). Ayar bazada saxlanılır, server yenidən başlayanda da qalır.</p>
       </div>
+      <div class="card-sub danger-zone" data-key="bulk">
+        <h3>⚠️ Bütün oyunçuların balansı</h3>
+        <p class="muted" style="font-size:12px">Yalnız aktiv oyunçu hesabları (admin/moderator daxil deyil). Oyun tarixçəsi, raund nəticələri, dərəcələr, borclar və kredit borcu dəyişmir. Real otaqlarda raund gedirsə əməliyyat icra olunmur. Əvvəl ön baxış göstərilir, sonra ikinci təsdiq istənilir.</p>
+        <div class="row" style="flex-wrap:wrap;gap:8px">
+          <button type="button" class="btn red" data-a="bulkPreview" data-op="reset">Hamısını 0-a sıfırla…</button>
+        </div>
+        <form data-form="bulkGrant" data-key="bulkGrant" data-keep-dirty class="row mini-form mt" style="flex-wrap:wrap">
+          <div><label>Hər oyunçuya veriləcək xal</label><input name="amount" type="number" inputmode="numeric" min="1" required></div>
+          <div style="align-self:flex-end"><button class="btn primary">Hamısına ver…</button></div>
+        </form>
+        <h4>Admin əməliyyatları qeydiyyatı</h4>
+        ${(A().log || []).map((l) => `<div class="tx"><div><b>${l.action === 'bulk_reset' ? 'Bütün balanslar sıfırlandı' : `Hamısına ${fmt(l.amount)}`}</b> · ${l.affected} hesab
+          <div class="meta">${fmtDate(l.createdAt)} · ${esc(l.adminName || '#' + l.adminId)}</div></div></div>`).join('') || '<p class="muted" style="font-size:12.5px">Hələ toplu əməliyyat yoxdur.</p>'}
+      </div>
       <form data-form="adminSettings" data-key="adminSettings" data-keep-dirty>
         <label>Yeni qeydiyyat bonusu (virtual xal)</label>
         <input name="signupBonus" type="number" inputmode="numeric" min="0" value="${A().settings?.signupBonus ?? 100}">
@@ -196,7 +256,7 @@ const FILTERS = {
 
 function adminTabsHTML() {
   const pendingCredit = A().credit ? A().credit.requests.filter((r) => r.status === 'pending').length : 0;
-  const tabs = [['users', 'İstifadəçilər'], ['credit', `Kredit${pendingCredit ? ` (${pendingCredit})` : ''}`], ['loans', 'Borclar'], ['gifts', 'Hədiyyələr'], ['tgifts', 'Masa hədiyyələri'], ['tx', 'Əməliyyatlar'], ['stats', 'Nəticələr'], ['settings', 'Ayarlar']];
+  const tabs = [['users', 'İstifadəçilər'], ['credit', `Kredit${pendingCredit ? ` (${pendingCredit})` : ''}`], ['loans', 'Borclar'], ['gifts', 'Hədiyyələr'], ['tgifts', 'Masa hədiyyələri'], ['tx', 'Əməliyyatlar'], ['stats', 'Nəticələr'], ...(isAdmin() ? [['shop', 'Market']] : []), ['settings', 'Ayarlar']];
   return tabs.map(([k, l]) => `<button class="btn ${S.adminTab === k ? 'active' : ''}" data-a="adminTab" data-v="${k}">${l}</button>`).join('');
 }
 
@@ -207,7 +267,7 @@ export function renderAdmin(topbar) {
     <div class="tabs scroll" id="adminTabs">${adminTabsHTML()}</div>
     ${S.adminTab === 'tgifts' ? `<div class="card-panel" id="tgSettings">${tgiftSettingsHTML()}</div>` : ''}
     <div class="card-panel">
-      ${S.adminTab !== 'settings' ? `<div class="row admin-tools">
+      ${!['settings', 'shop'].includes(S.adminTab) ? `<div class="row admin-tools">
         <input id="adminSearch" type="search" placeholder="Ad və ya istifadəçi adı ilə axtar..." value="${esc(A().q)}" autocomplete="off">
         ${f ? `<select id="adminFilter">${f.map(([v, l]) => `<option value="${v}" ${A().filter === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
       </div>` : ''}
@@ -244,6 +304,15 @@ export function adminForms(render, reload) {
       const r = await moneyCall(`creditApprove${id}`, `/api/admin/credit/${id}/approve`, { amount: Number(data.amount), newLimit: data.newLimit === '' ? null : Number(data.newLimit), note: data.note });
       if (r) { toast(r.duplicate ? 'Artıq təsdiqlənib.' : 'Kredit verildi.', true); reload(); }
     },
+    shopItem: async (data, form) => {
+      const id = form.dataset.id;
+      const r = await api(`/api/admin/shop/${encodeURIComponent(id)}`, { name: data.name, price: Number(data.price), active: data.active === 'on' });
+      const d = A().shop;
+      if (d) d.items = d.items.map((x) => (x.id === id ? r.item : x));
+      const el = document.getElementById('adminList');
+      if (el) { morph(el, adminListHTML()); el.querySelector(`form[data-form="shopItem"][data-id="${id}"]`)?.reset(); }
+      toast(`Yadda saxlanıldı: «${r.item.name}» — ${r.item.price} xal${r.item.active ? '' : ' (satışda deyil)'}.`, true);
+    },
     tgiftSettings: async (data, form) => {
       const gifts = (A().tgifts?.gifts || []).map((g) => ({ id: g.id, price: Number(data[`price_${g.id}`]), active: data[`active_${g.id}`] === 'on', sharePct: data[`pct_${g.id}`] === '' ? null : Number(data[`pct_${g.id}`]) }));
       const r = await api('/api/admin/table-gifts/settings', { sharePct: Number(data.sharePct), gifts });
@@ -258,6 +327,7 @@ export function adminForms(render, reload) {
       form.reset();
       reload();
     },
+    bulkGrant: async (data) => { await bulkFlow('grant', data.amount, render, reload); },
     adminSettings: async (data) => {
       const r = await api('/api/admin/settings', { signupBonus: Number(data.signupBonus) });
       A().settings = { ...(A().settings || {}), ...r };
@@ -266,9 +336,37 @@ export function adminForms(render, reload) {
   };
 }
 
+async function bulkFlow(op, amount, render, reload) {
+  const pv = await api(`/api/admin/bulk/preview?op=${op}${op === 'grant' ? `&amount=${encodeURIComponent(amount)}` : ''}`);
+  if (pv.activeRounds) { toast('Hazırda real otaqlarda raund gedir — raundlar bitəndən sonra yenidən cəhd edin.'); return; }
+  const what = op === 'reset' ? `<b>${pv.affected}</b> oyunçunun balansı <b>0 xal</b> olacaq (hazırda cəmi ${fmt(pv.total)}).` : `<b>${pv.affected}</b> oyunçunun hər birinə <b>${fmt(pv.amount)}</b> veriləcək (cəmi ${fmt(pv.total)}).`;
+  S.modal = { title: op === 'reset' ? '⚠️ Balansları sıfırla' : '🎁 Hamısına xal ver', kind: 'bulk', html: `<p>${what}</p>
+    <p class="muted" style="font-size:12.5px">Oyun tarixçəsi, dərəcələr və borclar dəyişmir. Hər hesabın tarixçəsinə qeyd yazılır, əməliyyat admin qeydiyyatına düşür.</p>
+    <button class="btn ${op === 'reset' ? 'red' : 'primary'} block" data-a="bulkConfirm" data-op="${op}" data-amount="${pv.amount || ''}" data-count="${pv.affected}">Təsdiq et (${pv.affected} hesab)</button>` };
+  render();
+}
+
 export function adminHandlers(render, reload) {
   const user = (el) => A().users.find((x) => x.id === Number(el.dataset.id));
   return {
+    bulkPreview: (el) => bulkFlow(el.dataset.op, null, render, reload),
+    shopImgReset: async (el) => {
+      if (!confirm('Admin şəkli silinsin və standart ikon qaytarılsın?')) return;
+      try { await api(`/api/admin/shop/${encodeURIComponent(el.dataset.id)}/image`, null, 'DELETE'); toast('Standart ikon qaytarıldı.', true); reload(); } catch (e) { toast(e.message); }
+    },
+    bulkConfirm: async (el) => {
+      const op = el.dataset.op; const count = Number(el.dataset.count);
+      // ikinci təsdiq
+      if (!confirm(op === 'reset' ? `SON TƏSDİQ: ${count} oyunçunun balansı 0 olacaq. Davam edilsin?` : `SON TƏSDİQ: ${count} oyunçuya ${el.dataset.amount} xal veriləcək. Davam edilsin?`)) return;
+      el.disabled = true;
+      try {
+        const r = await moneyCall(`bulk-${op}`, '/api/admin/bulk', { op, amount: Number(el.dataset.amount) || undefined, expectCount: count, confirm: true });
+        if (!r) return;
+        S.modal = null;
+        toast(r.duplicate ? 'Bu əməliyyat artıq icra olunub.' : `Hazırdır: ${r.affected} hesab.`, true);
+        reload();
+      } catch (e) { toast(e.message); el.disabled = false; }
+    },
     adminMore: () => { A().page++; refreshAdminList(); },
     loginSwitch: async (el) => {
       const open = el.dataset.v === '1';

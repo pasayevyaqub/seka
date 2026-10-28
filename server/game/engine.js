@@ -15,7 +15,7 @@ export const DEFAULT_SETTINGS = {
 export const TIMING = {
   OFFER_MS: 20_000,      // Seka / bölmə təklifinə cavab vaxtı (növbə vaxtından çox ola bilməz)
   MIN_OFFER_MS: 5_000,   // növbədən bu qədərdən az vaxt qalıbsa təklif göndərmək olmaz
-  DECISION_MS: 30_000,   // "eyni xala baxaq" cavabı, bərabər xal qərarı
+  DECISION_MS: 30_000,   // "eyni xala baxaq" cavabı, bərabər xal qərarı, seka seçimi (bankı saxla / böl)
   SEKA_JOIN_MS: 60_000,  // sekaya qoşulma vaxtı (ayrıca)
   DISCARD_MS: 30_000,    // sekada 4 kartdan birini atma vaxtı (ayrıca)
   CREDIT_OFFER_MS: 30_000, // "Borca oyna" təklifinə cavab vaxtı
@@ -25,6 +25,24 @@ export const CREDIT_MAX_LIMIT = 1_000_000;
 const DAY_MS = 86_400_000;
 
 export class GameError extends Error {}
+
+// Azərbaycan dilində yiyəlik hal: Yaqub → Yaqubun, Anar → Anarın, Elvin → Elvinin, Leyla → Leylanın
+export function genitive(name) {
+  const n = String(name || '').trim();
+  const lower = n.toLocaleLowerCase('az');
+  const last = lower.slice(-1);
+  if (/[0-9]/.test(last)) return `${n}-${['ın', 'in', 'nin', 'ün', 'ün', 'in', 'nın', 'nin', 'in', 'un'][Number(last)]}`; // rəqəmin oxunuşu ilə
+  if (!/\p{L}/u.test(last)) return `${n}-in`;
+  let v = '';
+  for (const ch of lower) if ('aıoueəiöü'.includes(ch)) v = ch;
+  const suf = { a: 'ın', ı: 'ın', o: 'un', u: 'un', e: 'in', ə: 'in', i: 'in', ö: 'ün', ü: 'ün' }[v] || 'in';
+  return n + ('aıoueəiöü'.includes(last) ? 'n' : '') + suf;
+}
+const mergeFlows = (...lists) => {
+  const m = new Map();
+  for (const f of lists.flat()) { const k = `${f.from}>${f.to}`; m.set(k, (m.get(k) || 0) + f.cents); }
+  return [...m.entries()].map(([k, cents]) => { const [from, to] = k.split('>'); return { from: Number(from), to: Number(to), cents }; });
+};
 
 export class Round {
   /**
@@ -50,6 +68,9 @@ export class Round {
     this.creditLoans = [];      // raund bitəndə yaranan borclar: {borrower, lender, amount, dueDays}
     this.allowCredit = false;   // otaq təyin edir: yalnız real (botsuz, demo olmayan) otaqda
     this.jackpotFlows = [];     // cəkpot ödənişləri (birbaşa)
+    this.priorFlows = [];       // v3.2: sekadan əvvəl bölünmüş bankın axınları (qarşılıqlı nəticə üçün)
+    this.compares = [];         // v3.2: baxışma anındakı xallar — raund bitənə qədər heç kimə göndərilmir
+    this.chatOut = [];          // v3.2: çata yazılacaq oyun mesajları (otaq idarəçisi götürür)
     this.jackpots = [];         // açılmış cəkpotlar: {holder, kind, declared, payments:[{from, paid}]}
     this.secretAce = null;      // gizli 3 Tuz: {holder, decided, hidden} — yalnız sahibinə görünür
     this.handNo = 0;
@@ -326,6 +347,9 @@ export class Round {
     const so = handScore(this.ps[o].cards);
     this.ps[c].seen.add(o);
     this.ps[o].seen.add(c);
+    // v3.2: baxışma anındakı hər iki xal serverdə yadda saxlanılır; raund gedərkən başqalarına göstərilmir və
+    // çata yazılmır — raund bitəndə nəticədə açılır ("Yaqubun baxış vaxtı xalı 20 idi")
+    this.compares.push({ a: c, b: o, aScore: sc, bScore: so, winner: sc === so ? null : (sc > so ? c : o), hand: this.handNo });
     const finalTwo = this.active().length === 2;
     this.phase = 'betting';
     this.pending = null;
@@ -337,7 +361,7 @@ export class Round {
     } else if (finalTwo) {
       this.phase = 'tieDecision';
       this.pending = { type: 'tieDecision', a: c, b: o, votes: {}, deadline: now + TIMING.DECISION_MS, score: sc };
-      this.say(`Xallar bərabərdir (${sc} xal)! ${this.name(c)} və ${this.name(o)}: Seka və ya bankı bölmək?`);
+      this.say(`Xallar bərabərdir! ${this.name(c)} və ${this.name(o)}: Seka və ya bankı bölmək?`);
       return;
     } else if (tieDeal) {
       this.ps[c].status = 'attached';
@@ -406,9 +430,14 @@ export class Round {
     const shown = shownIds.filter((id) => this.ps[id]?.cards).map((id) => ({
       id, name: this.name(id), cards: this.ps[id].cards, score: handScore(this.ps[id].cards),
     }));
-    this.result = { winners, payouts, how, shown, jackpots: this.jackpots, flows: this.computeFlows(payouts), creditLoans: this.creditLoans };
+    const compares = this.compares.map((x) => ({ ...x, aName: this.name(x.a), bName: this.name(x.b) }));
+    this.result = { winners, payouts, how, shown, compares, jackpots: this.jackpots, flows: mergeFlows(this.priorFlows, this.computeFlows(payouts)), creditLoans: this.creditLoans };
     const names = winners.map((id) => `${this.name(id)} (+${payouts[id]} xal)`).join(', ');
     this.say(winners.length > 1 ? `Bank bölündü: ${names}` : `Qalib: ${names}`);
+    for (const x of compares) {
+      const res = x.winner == null ? 'bərabər' : `${x.winner === x.a ? x.aName : x.bName} qalib gəldi`;
+      this.say(`Baxış nəticəsi: ${genitive(x.aName)} baxış vaxtı xalı ${x.aScore} idi, ${genitive(x.bName)} — ${x.bScore} (${res}).`);
+    }
   }
 
   /**
@@ -467,30 +496,79 @@ export class Round {
     this.turn = null;
     this.pending = null;
     this.secretAce = null;
-    this.result = { winners: [], payouts: {}, how: 'aborted', shown: [], jackpots: [], flows: [], creditLoans: [] };
+    this.result = { winners: [], payouts: {}, how: 'aborted', shown: [], compares: [], jackpots: [], flows: this.priorFlows, creditLoans: [] };
     this.say('Raund ləğv edildi, pullar qaytarıldı.');
     this.version++;
   }
 
-  startSekaJoin(a, b, now) {
+  /** v3.2: Sekaya keçməzdən əvvəl iki əsas oyunçu seçir: "Bankı saxla" (keep) və ya "Pulu böl və 2× Seka oyna" (split).
+   *  Razılaşmasalar: xalı çox olanın seçimi; xallar bərabərdirsə təklifi alanın (receiver). */
+  enterSeka(a, b, receiver, now) {
+    if (this.secretAce) return this.openSecretAce('seka qərarı');
+    const sa = this.ps[a]?.cards ? handScore(this.ps[a].cards) : 0;
+    const sb = this.ps[b]?.cards ? handScore(this.ps[b].cards) : 0;
+    const chooser = sa === sb ? receiver : (sa > sb ? a : b);
+    this.phase = 'sekaChoice';
+    this.turn = null;
+    this.pending = { type: 'sekaChoice', a, b, receiver, chooser, votes: {}, pot: this.pot, splitCost: this.settings.ante * 2, deadline: now + TIMING.DECISION_MS };
+    this.say(`Seka! ${this.name(a)} və ${this.name(b)} seçir: "Bankı saxla" (${this.pot} xal bankda qalır, qoşulmaq ${this.pot} xal) və ya "Pulu böl və 2× Seka oyna".`);
+  }
+
+  resolveSekaChoice(now) {
+    const p = this.pending;
+    const va = p.votes[p.a]; const vb = p.votes[p.b];
+    let choice; let why;
+    if (va && va === vb) { choice = va; why = 'hər ikisi razıdır'; }
+    else if (va && vb) { choice = p.votes[p.chooser]; why = p.chooser === p.receiver && this.sameScore(p) ? `xallar bərabərdir — təklifi alan ${this.name(p.chooser)} seçdi` : `razılaşma olmadı — xalı çox olan ${this.name(p.chooser)} seçdi`; }
+    else if (va || vb) { choice = va || vb; why = 'yalnız bir oyunçu seçdi'; }
+    else { choice = 'keep'; why = 'vaxt bitdi'; }
+    this.say(`Seka qərarı: ${choice === 'keep' ? 'Bankı saxla' : 'Pulu böl və 2× Seka oyna'} (${why}).`);
+    return this.startSekaJoin(p.a, p.b, now, choice);
+  }
+  sameScore(p) { return handScore(this.ps[p.a].cards) === handScore(this.ps[p.b].cards); }
+
+  startSekaJoin(a, b, now, mode = 'keep') {
     if (this.secretAce) return this.openSecretAce('seka qərarı');
     // bərabər nəticə: şərti qoyuluşlar sekadan ƏVVƏL bağlanır (iki tərəf arasında bərabər) — növbəti raunda gizli borc keçmir
     if (this.creditPot) this.settleCredit({ [a]: 1, [b]: 1 }, 'seka');
     const eligible = this.participants().filter((id) => id !== a && id !== b && !this.left.has(id));
     this.phase = 'sekaJoin';
-    this.pending = null;
     this.turn = null;
     // QAYDA (README 5d): bank bölünmür, TAM HƏCMİ ilə seka əlinə keçir (yalnız real xal — şərti qoyuluş yuxarıda bağlanıb).
     // Əsas iki oyunçu əlavə ödəmir. Bu raundda iştirak edib pas/uduzan oyunçu 2 × oyun haqqı ödəyib qoşula bilər.
     // Raund başlayandan sonra otağa gələn oyunçu bu sekaya qoşula bilməz (cari bankdan pay almır) — növbəti yeni raundu gözləyir.
-    this.carry = { pot: this.pot, hands: (this.carry?.hands || 0) + 1 };
-    this.sekaJoin = { base: [a, b], eligible, joined: [], skipped: [], cost: this.settings.ante * 2, carried: this.pot, deadline: now + TIMING.SEKA_JOIN_MS };
-    this.say(`SEKA! Bank (${this.pot} xal) itirilmir — tam həcmi ilə seka əlinə keçir. Əsas oyunçular əlavə ödəmir; qoşulmaq üçün: ${this.sekaJoin.cost} xal.`);
+    let baseOut = [];
+    if (mode === 'split' && this.pot > 0) {
+      // bank iki əsas oyunçu arasında bərabər bölünür (tək qalan 1 xal təklifi alana); sonra seka 2× oyun haqqı ilə yenidən
+      const half = Math.floor(this.pot / 2);
+      const pay = { [a]: half, [b]: this.pot - half };
+      const recv = this.pending?.receiver ?? b;
+      if (recv === a) { pay[a] = this.pot - half; pay[b] = half; }
+      this.priorFlows = mergeFlows(this.priorFlows, this.computeFlows(pay));
+      for (const id of [a, b]) this.credit(id, pay[id], 'Seka: bank bölündü');
+      this.say(`Bank bölündü: ${this.name(a)} +${pay[a]} xal, ${this.name(b)} +${pay[b]} xal. Seka 2× oyun haqqı ilə: hər iştirakçı ${this.settings.ante * 2} xal.`);
+      this.pot = 0;
+      this.contrib = {};
+      this.jackpotFlows = [];
+    }
+    if (mode === 'split') {
+      const cost = this.settings.ante * 2;
+      for (const id of [a, b]) {
+        if (this.left.has(id) || !this.canAfford(id, cost)) { baseOut.push(id); this.say(`${this.name(id)} 2× oyun haqqını ödəyə bilmir — sekada iştirak etmir.`); continue; }
+        this.debitToPot(id, cost, 'Seka (2× oyun haqqı)');
+      }
+    }
+    this.carry = mode === 'keep' ? { pot: this.pot, hands: (this.carry?.hands || 0) + 1 } : null;
+    const cost = mode === 'keep' ? Math.max(1, this.pot) : this.settings.ante * 2;
+    this.sekaJoin = { mode, base: [a, b], baseOut, eligible, joined: [], skipped: [], cost, carried: mode === 'keep' ? this.pot : 0, deadline: now + TIMING.SEKA_JOIN_MS };
+    this.pending = null;
+    if (mode === 'keep') this.say(`SEKA! Bank (${this.pot} xal) saxlanılır və seka əlinə keçir. Əsas oyunçular əlavə ödəmir; qoşulmaq üçün minimum bankdakı məbləğ: ${cost} xal.`);
+    else this.say(`SEKA (2×)! Qoşulmaq üçün: ${cost} xal.`);
   }
 
   startSekaHand(now) {
     const sj = this.sekaJoin;
-    const ids = this.order.filter((id) => (sj.base.includes(id) || sj.joined.includes(id)) && !this.left.has(id));
+    const ids = this.order.filter((id) => ((sj.base.includes(id) && !(sj.baseOut || []).includes(id)) || sj.joined.includes(id)) && !this.left.has(id));
     if (ids.length === 0) return this.abort();
     if (ids.length === 1) { this.sekaJoin = null; return this.finish([[ids[0]]], 'last'); }
     this.say(`Seka raundu başladı: ${ids.map((i) => this.name(i)).join(', ')}. Hər kəsə 4 kart.`);
@@ -524,7 +602,7 @@ export class Round {
   _act(id, action, now) {
     const t = action?.type;
     const me = this.ps[id];
-    if (this.isSecretHolder(id) && ['xod', 'baxis', 'offerSeka', 'offerSplit'].includes(t)) this.secretAce.decided = true;
+    if (this.isSecretHolder(id) && ['xod', 'baxis', 'offerSeka', 'offerSplit', 'offerAny'].includes(t)) this.secretAce.decided = true;
     if (this.left.has(id) && t !== 'look') throw new GameError('Siz bu raundu tərk etmisiniz.');
     switch (t) {
       case 'xod': {
@@ -587,9 +665,10 @@ export class Round {
         const p = this.pending;
         if (this.phase !== 'offer' || p.to !== id) throw new GameError('Sizdən cavab gözlənilmir.');
         if (t === 'offerDecline') return this.endOffer(false);
+        if (p.kind === 'any') throw new GameError('Seçim edin: ½ bölək, Seka və ya davam.');
         this.say(`${this.name(id)} təklifi qəbul etdi.`);
         if (p.kind === 'split') return this.finish([[p.from], [p.to]], 'split');
-        return this.startSekaJoin(p.from, p.to, now);
+        return this.enterSeka(p.from, p.to, p.to, now);
       }
       case 'tieAccept':
       case 'tieDecline': {
@@ -608,6 +687,47 @@ export class Round {
         this.say(`${this.name(id)}: ${action.choice === 'seka' ? 'Seka' : 'Bölək'}`);
         if (p.votes[p.a] && p.votes[p.b]) return this.decideTie(now);
         return;
+      }
+      case 'sekaChoice': {
+        const p = this.pending;
+        if (this.phase !== 'sekaChoice' || (p.a !== id && p.b !== id)) throw new GameError('Sizdən seçim gözlənilmir.');
+        if (action.choice !== 'keep' && action.choice !== 'split') throw new GameError('Yanlış seçim.');
+        if (p.votes[id]) throw new GameError('Artıq seçim etmisiniz.');
+        p.votes[id] = action.choice;
+        this.say(`${this.name(id)}: ${action.choice === 'keep' ? 'Bankı saxla' : 'Pulu böl və 2× Seka oyna'}`);
+        if (p.votes[p.a] && p.votes[p.b]) return this.resolveSekaChoice(now);
+        return;
+      }
+      // v3.2: iki oyunçu qalanda növbəsi olan "Nəyəsə gəlir?" soruşur; qarşı tərəf seçir: ½ bölək / Seka / davam
+      case 'offerAny': {
+        this.mustTurn(id);
+        const act = this.active();
+        if (act.length !== 2) throw new GameError('Təklif yalnız 2 oyunçu qalanda mümkündür.');
+        if (this.offerUsed) throw new GameError('Bu növbədə artıq təklif göndərmisiniz.');
+        if (this.turnDeadline - now < TIMING.MIN_OFFER_MS) throw new GameError('Təklif üçün vaxt azdır — xod edin.');
+        const to = act.find((x) => x !== id);
+        this.offerUsed = true;
+        this.phase = 'offer';
+        this.pending = { type: 'offer', kind: 'any', from: id, to, deadline: Math.min(now + TIMING.OFFER_MS, this.turnDeadline) };
+        this.say(`${this.name(id)}: "Nəyəsə gəlir?" — ${this.name(to)} seçir.`);
+        this.chatOut.push({ userId: id, text: `🤝 ${this.name(to)}, nəyəsə gəlir? (½ bölək / Seka / davam)` });
+        return;
+      }
+      case 'offerReply': {
+        const p = this.pending;
+        if (this.phase !== 'offer' || p.kind !== 'any' || p.to !== id) throw new GameError('Sizdən cavab gözlənilmir.');
+        const ch = action.choice;
+        if (!['split', 'seka', 'no'].includes(ch)) throw new GameError('Yanlış seçim.');
+        this.chatOut.push({ userId: id, text: { split: '½ bölək', seka: 'Seka', no: 'Heç nəyə gəlmirəm, davam elə' }[ch] });
+        if (ch === 'no') {
+          this.say(`${this.name(id)}: heç nəyə gəlmir — ${this.name(p.from)} oyunu davam etdirir.`);
+          this.phase = 'betting';
+          this.pending = null;
+          return;
+        }
+        this.say(`${this.name(id)}: ${ch === 'split' ? '½ bölək' : 'Seka'}.`);
+        if (ch === 'split') return this.finish([[p.from], [p.to]], 'split');
+        return this.enterSeka(p.from, p.to, p.to, now);
       }
       case 'sekaJoin': {
         const sj = this.sekaJoin;
@@ -752,7 +872,7 @@ export class Round {
 
   decideTie(now) {
     const p = this.pending;
-    if (p.votes[p.a] === 'seka' && p.votes[p.b] === 'seka') return this.startSekaJoin(p.a, p.b, now);
+    if (p.votes[p.a] === 'seka' && p.votes[p.b] === 'seka') return this.enterSeka(p.a, p.b, p.b, now);
     return this.finish([[p.a], [p.b]], 'split', [p.a, p.b]);
   }
 
@@ -780,6 +900,7 @@ export class Round {
       this.decideTie(now);
       return true;
     }
+    if (this.phase === 'sekaChoice' && now >= this.pending.deadline) { this.resolveSekaChoice(now); return true; }
     if (this.phase === 'sekaJoin' && now >= this.sekaJoin.deadline) { this.say('Qoşulma vaxtı bitdi — seka qoşulanlarla davam edir.'); this.startSekaHand(now); return true; }
     if (this.phase === 'discard' && now >= this.discardDeadline) {
       for (const id of this.active()) if (!this.ps[id].cards) this.doDiscard(id, this.ps[id].hand.length - 1, true);
@@ -814,7 +935,7 @@ export class Round {
       if (this.active().length <= 1 || this.allDiscarded()) this.afterDeal(now);
       return;
     }
-    if (this.phase === 'tieDecision') {
+    if (this.phase === 'tieDecision' || this.phase === 'sekaChoice') {
       const p = this.pending;
       return this.finish([[p.a === id ? p.b : p.a]], 'last');
     }
@@ -893,6 +1014,10 @@ export class Round {
       pending = { ...rest, voted: votes ? Object.keys(votes).map(Number) : undefined };
       // borca oyun təklifində "çatışmayan məbləğ" borclunun balansını göstərir — yalnız iki tərəfə (risk məlumatı)
       if (pending.type === 'creditOffer' && uid !== pending.from && uid !== pending.to) { delete pending.shortfall; delete pending.turnLeft; }
+      // bərabər xalın özü raund gedərkən yalnız iki tərəfə (onlar bir-birinin kartını görür)
+      if (pending.type === 'tieDecision' && uid !== pending.a && uid !== pending.b) delete pending.score;
+      // seka seçimi: kimin seçiminin üstün olduğu (xalı çox olan) heç kimə göndərilmir
+      if (pending.type === 'sekaChoice') { delete pending.chooser; pending.myVote = pending.voted?.includes(uid) ? this.pending.votes[uid] : null; }
     }
     let result = null;
     if (this.result) {

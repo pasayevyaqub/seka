@@ -95,7 +95,7 @@ export const KIND_LABEL = {
   credit: 'Kredit', credit_repay: 'Kredit ödənişi', gift_out: 'Hədiyyə (göndərildi)', gift_in: 'Hədiyyə (alındı)',
   loan_out: 'Borc verildi', loan_in: 'Borc alındı', loan_repay_out: 'Borc ödənişi', loan_repay_in: 'Borc qaytarıldı',
   loan_auto_out: 'Avtomatik tutulma', loan_auto_in: 'Avtomatik ödəniş alındı',
-  tgift_out: 'Masa hədiyyəsi (göndərildi)', tgift_in: 'Masa hədiyyəsi (alındı)',
+  tgift_out: 'Masa hədiyyəsi (göndərildi)', tgift_in: 'Masa hədiyyəsi (alındı)', shop: 'Market (virtual əşya)',
 };
 export const LOAN_STATUS = { requested: 'Borc istəyi', offered: 'Təklif', active: 'Aktiv', overdue: 'Gecikib', paid: 'Ödənilib', declined: 'Rədd edilib', cancelled: 'Ləğv edilib' };
 

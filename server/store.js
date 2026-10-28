@@ -1,7 +1,16 @@
 // İstifadəçilər, sessiyalar, balans əməliyyatları, raund qeydləri və qarşılıqlı nəticələr
 import crypto from 'node:crypto';
+import { DAILY_GROUP_CAP, rankFor } from './ranks.js';
 
 export class UserError extends Error {}
+
+// telefon: boş → null; yalnız rəqəm və əvvəldə "+" (7–15 rəqəm)
+export function normPhone(v) {
+  const s = String(v ?? '').replace(/[\s()-]/g, '');
+  if (!s) return null;
+  if (!/^\+?\d{7,15}$/.test(s)) throw new UserError('Telefon nömrəsi yanlışdır (məs. +994501234567).');
+  return s;
+}
 
 const now = () => Date.now();
 
@@ -23,10 +32,11 @@ export const publicUser = (u) => u && ({
   id: u.id, username: u.username, displayName: u.display_name, phone: u.phone,
   role: u.role, status: u.status, balance: Number(u.balance), createdAt: Number(u.created_at),
   creditDebt: Number(u.credit_debt || 0), creditLimit: Number(u.credit_limit || 0), avatarVer: Number(u.avatar_ver || 0),
+  phoneVerified: Number(u.phone_verified || 0) === 1,
 });
 
 // şəkil (avatar) binar məlumatı hər sorğuda daşınmasın deyə sütunlar açıq yazılır
-const USER_COLS = 'id, username, display_name, display_key, phone, pass_hash, role, status, balance, created_at, credit_debt, credit_limit, avatar_ver';
+const USER_COLS = 'id, username, display_name, display_key, phone, pass_hash, role, status, balance, created_at, credit_debt, credit_limit, avatar_ver, phone_verified';
 
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
 
@@ -148,6 +158,38 @@ export class Store {
     await this.setPassword(id, newPw);
   }
 
+  /**
+   * Oyunçunun öz hesab ayarları: ad, telefon, şifrə. HƏR dəyişiklik üçün mövcud şifrə serverdə yoxlanılır.
+   * Yeni şifrə iki dəfə yazılmalıdır; scrypt + duz ilə hash saxlanılır. Şifrə dəyişəndə digər sessiyalar bağlanır.
+   * Telefon dəyişəndə nömrə "təsdiqlənməmiş" olur (SMS xidməti qoşulmayıb — təsdiq kodu göndərilmir).
+   */
+  async updateOwnAccount(id, { currentPassword, displayName, phone, newPassword, newPassword2 } = {}, keepToken = null) {
+    const u = await this.getUser(id);
+    if (!u) throw new UserError('İstifadəçi tapılmadı.');
+    if (!checkPassword(String(currentPassword || ''), u.pass_hash)) throw new UserError('Mövcud şifrə yanlışdır.');
+    const changed = [];
+    if (displayName !== undefined && String(displayName).trim() !== u.display_name) { await this.setDisplayName(id, displayName); changed.push('ad'); }
+    if (phone !== undefined) {
+      const p = normPhone(phone);
+      if ((p || null) !== (u.phone || null)) {
+        await this.db.run('UPDATE users SET phone = $1, phone_verified = 0 WHERE id = $2', [p, id]);
+        changed.push('telefon');
+      }
+    }
+    if (newPassword) {
+      if (String(newPassword) !== String(newPassword2 ?? '')) throw new UserError('Yeni şifrələr eyni deyil.');
+      if (String(newPassword).length < 6) throw new UserError('Yeni şifrə ən azı 6 simvol olmalıdır.');
+      if (checkPassword(String(newPassword), u.pass_hash)) throw new UserError('Yeni şifrə köhnə şifrə ilə eynidir.');
+      await this.setPassword(id, newPassword);
+      // digər cihazlardakı sessiyalar bağlanır, cari sessiya qalır
+      if (keepToken) await this.db.run('DELETE FROM sessions WHERE user_id = $1 AND token <> $2', [id, keepToken]);
+      else await this.dropSessions(id);
+      changed.push('şifrə');
+    }
+    if (!changed.length) throw new UserError('Dəyişiklik yoxdur.');
+    return { changed, user: await this.getUser(id) };
+  }
+
   // Admin balans dəyişikliyi (atomik: balans + jurnal). Yeni balansı qaytarır.
   async addBalance(userId, delta, reason, byUser = null, kind = 'admin') {
     delta = Math.trunc(delta);
@@ -263,6 +305,18 @@ export class Store {
             await q.run('INSERT INTO notifications(user_id, kind, text, created_at) VALUES($1, $2, $3, $4)',
               [l.lender, 'loan', `${l.note || 'Borca oyun'}: ${name(l.borrower)}-dan alacağınız ${l.amount} xal (#${row.id}).`, t]);
           }
+          // dərəcə üçün nəticələr (balansdan ayrı). Eyni tərkiblə 24 saatda ən çox DAILY_GROUP_CAP raund sayılır.
+          const res = (end.results || []).filter((x) => x.userId > 0);
+          const group = res.map((x) => x.userId).sort((a, b) => a - b).join('-');
+          for (const x of res) {
+            let counted = x.real && res.length >= 2 ? 1 : 0;
+            if (counted) {
+              const c = await q.get('SELECT COUNT(*) AS n FROM round_results WHERE user_id = $1 AND group_key = $2 AND counted = 1 AND created_at > $3', [x.userId, group, t - 86_400_000]);
+              if (Number(c?.n || 0) >= DAILY_GROUP_CAP) counted = 0;
+            }
+            await q.run(`INSERT INTO round_results(round_uid, user_id, outcome, net, group_key, counted, created_at) VALUES($1, $2, $3, $4, $5, $6, $7)
+              ON CONFLICT(round_uid, user_id) DO NOTHING`, [uid, x.userId, x.outcome, x.net || 0, group, counted, t]);
+          }
           for (const f of end.flows || []) {
             if (f.from < 0 || f.to < 0) continue; // botlar
             await q.run(
@@ -305,6 +359,20 @@ export class Store {
     }
     if (count) console.log(`${count} yarımçıq raund ləğv edildi, pullar qaytarıldı.`);
     return count;
+  }
+
+  // ---- dərəcə statistikası (balansdan ayrı) ----
+  async playerStats(userId) {
+    const rows = await this.db.all('SELECT outcome, counted, COUNT(*) AS n FROM round_results WHERE user_id = $1 GROUP BY outcome, counted', [userId]);
+    const st = { wins: 0, losses: 0, splits: 0, countedWins: 0, games: 0 };
+    for (const r of rows) {
+      const n = Number(r.n);
+      st.games += n;
+      if (r.outcome === 'win') { st.wins += n; if (Number(r.counted) === 1) st.countedWins += n; }
+      else if (r.outcome === 'loss') st.losses += n;
+      else st.splits += n;
+    }
+    return { ...st, rank: rankFor(st.countedWins) };
   }
 
   // ---- qarşılıqlı nəticələr (qəpiklə) ----

@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Round } from '../server/game/engine.js';
+import { Round, TIMING } from '../server/game/engine.js';
 import { decide, chooseDiscard } from '../server/game/bot.js';
 import { score3 } from '../server/game/cards.js';
+
+// v3.2: Sekaya keçəndə əvvəl "Bankı saxla / Pulu böl və 2× Seka" seçimi — köhnə testlər "Bankı saxla" ilə davam edir
+const keep = (rr, choice = 'keep') => { if (rr.phase === 'sekaChoice') { const p = rr.pending; const t = p.deadline - TIMING.DECISION_MS; rr.act(p.a, { type: 'sekaChoice', choice }, t); rr.act(p.b, { type: 'sekaChoice', choice }, t); } };
+
 
 const c = (str) => ({ r: str.slice(0, -1), s: str.slice(-1) });
 const h = (str) => str.split(' ').map(c);
@@ -36,7 +40,7 @@ test('bot təkliflərə cavab verir, seka qərarı verir, kart atır', () => {
   r.act(1, { type: 'offerSeka' }, 0);
   const a = decide(r.viewFor(BOT, 0), BOT, {}, 0);
   assert.ok(a.type === 'offerAccept' || a.type === 'offerDecline');
-  r.act(BOT, { type: 'offerAccept' }, 0);
+  r.act(BOT, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.phase, 'sekaJoin');
   // qoşulmaq hüququ olan başqa oyunçu yoxdur — əsas oyunçu bot başlada bilər
   assert.deepEqual(r.viewFor(BOT, 0).sekaJoin.waiting, []);

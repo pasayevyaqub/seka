@@ -2,7 +2,7 @@
 
 Saytın görünən adı **Dairə**-dir. Oyunun özü Seka qaydaları ilə oynanılır və oyun daxilində "seka" termini saxlanılıb. Real-time multiplayer oyundur. İnterfeys Azərbaycan dilindədir və mobil uyğundur. Otaqlar adlı ola bilər, açıq və ya gizli, istəyə görə şifrəli. Bütün məbləğlər **virtual oyun balansıdır** və **xal** kimi göstərilir (v2.4-dən əvvəl "AZN" yazılırdı; məbləğlər eynidir). Real pul yatırma, nağdlaşdırma, faiz və ödəniş sistemi **yoxdur**.
 
-Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **2.8.0**.
+Nə dəyişdiyini görmək üçün `CHANGELOG.md` faylına baxın. Cari versiya: **3.0.0**.
 
 ## 1. Öz kompüterinizdə işə salmaq
 1. **Node.js** quraşdırın: https://nodejs.org (LTS, minimum 22.13).
@@ -168,16 +168,15 @@ Adi borc köçürməsindən fərqli **oyun daxili** mexanizmdir.
 5. Yaranan borc adi oyunçu borcudur: qaytarma, avtomatik tutulma, profil və admin bölmələri eyni işləyir. Mövcud borclar silinmir. Hesablar heç vaxt silinmir (yalnız bloklanır), ona görə alacaq itmir.
 6. "Kimdən udmuşam / kimə uduzmuşam" statistikası yalnız real xal axınlarını sayır.
 
-## 5d. Sekadan qalan bank (v2.8 qaydası)
-Mövcud qaydalarla uyğun olaraq aşağıdakı fərziyyə qəbul edilib:
-- Seka (bərabərlik və ya razılaşma) olanda bank **bölünmür və itmir** — tam məbləği ilə seka əlinə ("növbəti raund") keçir. Masada "BANK · sekadan X" yazılır.
-- **Əsas iki oyunçu** əlavə ödəmir (onların payı artıq bankdadır).
-- Bu raundda iştirak edib pas deyən/uduzan oyunçu **2 × oyun haqqı** (məs. haqq 10 xal → qoşulma 20 xal) qoyub qoşula bilər. Qoşulmayan heç nə ödəmir, amma əvvəl qoyduğu bankda qalır.
-- **Raund başlayandan sonra otağa gələn oyunçu** bu sekaya qoşula bilməz (cari bankdan pay almır). O, növbəti yeni raunddan adi oyun haqqı ilə oynayır.
-- Bank yalnız **real balansdan** qoyulan xallardan ibarətdir. "Borca oyna" ilə qoyulan şərti xallar seka başlamazdan əvvəl bağlanır (borclunun öz payı ləğv olur, qarşı tərəfin payı borc yazılır) və keçən banka **daxil edilmir** — ikinci dəfə sayılmır.
-- Seka əlində yenə bərabərlik → yenə seka (bank yenə tam keçir) və ya bölünmə (tək qalan 1 xal ilk tərəfə düşür, xal itmir). Seka əlində cəkpot → bank və cəkpot haqqı sahibinə.
-- Əsas oyunçu qoşulma vaxtı çıxsa — payı bankda qalır, seka qalanlarla oynanılır. Hamı çıxsa və ya raund ləğv olunsa (server yenidən başlaması, otağın bağlanması) — hər kəsə qoyduğu qaytarılır.
-- Testlər: `test/v28-engine.test.js` (pul saxlanma balansı: balanslar + bank həmişə sabit).
+## 5d. Seka və bank (v3.2 qaydası)
+Seka olanda (bərabər xal və hər ikisi "Seka", "Seka təklif et" qəbulu və ya "Nəyəsə gəlir?" → "Seka") əsas iki oyunçuya iki seçim göstərilir (30 san):
+- **🏦 Bankı saxla** — bank bölünmür, tam məbləği ilə seka əlinə keçir. Əsas iki oyunçu əlavə ödəmir. Bu raundda iştirak edib pas deyən/uduzan oyunçu **bankdakı məbləğ qədər** qoyub qoşula bilər (bank 5000 xaldırsa — qoşulma 5000 xal). Balansı çatmayan qoşula bilmir.
+- **💰 Pulu böl və 2× Seka oyna** — bank iki əsas oyunçu arasında yarıya bölünür (tək qalan 1 xal təklifi alana), sonra seka əli **2 × oyun haqqı** ilə oynanılır: əsas oyunçular da, qoşulanlar da hərəsi 2 × oyun haqqı qoyur (haqq 10 → 20 xal). 2 × haqqı ödəyə bilməyən əsas oyunçu sekada iştirak etmir.
+- **Razılaşmasalar:** xalı çox olanın seçimi; xallar bərabərdirsə təklifi alanın (bərabər baxışmada — baxılan oyunçunun) seçimi. Yalnız biri seçibsə onun seçimi; heç kim seçməyibsə — "Bankı saxla". Kimin seçiminin üstün olduğu ekranda göstərilmir.
+- Bank, bölgü, qoşulma haqqı və balanslar yalnız serverdə hesablanır; eyni seçim/qoşulma iki dəfə emal olunmur. Bölgü bazaya "Seka: bank bölündü" kimi yazılır; qarşılıqlı nəticə (kim kimə uduzub) bölgü + seka əlinin cəmidir.
+- **Raund başlayandan sonra otağa gələn oyunçu** bu sekaya qoşula bilməz. "Borca oyna" ilə qoyulan şərti xallar seka başlamazdan əvvəl bağlanır və banka daxil edilmir.
+- Əsas oyunçu seçim və ya qoşulma vaxtı çıxsa — seçim zamanı çıxarsa qarşı tərəf qalib olur; qoşulma zamanı payı bankda qalır. Raund ləğv olunsa — bölgüdən sonrakı qoyuluşlar qaytarılır (bölünmüş pay sahibində qalır), xal itmir.
+- Testlər: `test/v32-engine.test.js`, `test/v28-engine.test.js` (balanslar + bank həmişə sabit).
 
 ## 5c. Sekaya qoşulma
 - Qoşulmaq üçün **60 saniyə** verilir (təklifə cavab — 20, "eyni xala baxaq" və bərabər xal qərarı — 30, dörd kartdan birini atmaq — 30 saniyə; hamısı ayrı idarə olunur).
@@ -242,7 +241,7 @@ Mövcud qaydalarla uyğun olaraq aşağıdakı fərziyyə qəbul edilib:
 - **Masa:** oval yaşıl keçə, taxta və dəri kənar, incə qızılı xətlər, ortada "SEKA" yazısı. Hamısı CSS və SVG ilə ayrıca komponent kimi qurulub — fon şəkli və görünməz düymə yoxdur.
 - **Oturacaqlar:** 2–8 oyunçu masanın ətrafında düzülür. Hər oyunçuda avatar, ad, balans, kartların arxa üzü və banka qoyduğu məbləğ görünür. Növbəsi olan oyunçunun avatarı ətrafında vaxt halqası və saniyə sayğacı var. Sizin yeriniz masanın altındadır: avatarınız, böyük kartlarınız və "N xal" nişanı.
 - **Bank:** masanın ortasında virtual əskinas yığını və dəqiq məbləğ ("Virtual oyun balansı" yazısı ilə). Əskinaslar bu layihə üçün çəkilib, üzərində "VİRTUAL" yazılıb; real manatın surəti deyil.
-- **Düymələr:** böyük **Pas** (qırmızı), **Baxış** (göy), **Xod** (sarı, məbləğlə). "Seka təklif et" və "Bankı bölək" yalnız 2 oyunçu qalanda görünür və yalnız icazə olanda aktivdir. Gizli 3 Tuz sahibində Pas kilidlidir.
+- **Düymələr:** böyük **Pas** (qırmızı), **Baxış** (göy), **Xod** (sarı, məbləğlə). "🤝 Nəyəsə gəlir?" yalnız 2 oyunçu qalanda, növbəsi olana görünür (bax 9i). Gizli 3 Tuz sahibində Pas kilidlidir.
 - **Üst panel:** geri, otağın adı, "N/8 oyunçu · Seka", otaq kodu (kopyalamaq üçün toxunun), "Virtual oyun balansı" və **+** (kredit müraciəti), səs, tam ekran, bildirişlər.
 - **Alt panel:** 😊 emoji, mesaj sahəsi, ☰ çat tarixçəsi və oyun jurnalı.
 - **Ekranlar:** telefon şaquli, telefon üfüqi (masa solda, düymələr sağda), planşet və kompüter. iPhone-un kəsik və alt zolağı (safe area) nəzərə alınır; klaviatura açılanda mesaj sətri klaviaturanın üstündə qalır.
@@ -313,7 +312,54 @@ Mövcud qaydalarla uyğun olaraq aşağıdakı fərziyyə qəbul edilib:
 - **Çat tarixçəsi:** 💬 düyməsi çatı açır/bağlayır. Otağa qoşulduğunuz andan sonrakı mesajlar (son 100) otaqda qalır; çat bağlı ikən gələn mesajlar üçün qırmızı say görünür. Çat oyunu dayandırmır, yazı sahəsinin fokusu pozulmur. Tarixçəni yalnız otaq üzvləri görür; sonradan qoşulan köhnə söhbəti görmür. Mesajlar bazada saxlanılmır.
 - **Masadan borc:** rəqibin şəklinə toxunun → "🎁 Hədiyyə göndər", "💸 Borc istə", "🤝 Borc təklif et". Məbləğ və qaytarma müddəti seçilir. Qarşı tərəfə masada "🤝 borc təklifi cavabınızı gözləyir" zolağı çıxır — Qəbul/Rədd. Qəbula qədər heç nə dəyişmir; qəbulda hər iki balans serverdə bir tranzaksiyada yoxlanıb yazılır; əməliyyat borc verənin otaq növbəsində (oyun hərəkətləri ilə ardıcıl) icra olunur və gedən raundun balansı da dərhal yenilənir. Təkrar klik/itmiş cavab ikinci borc yaratmır. Masadan və raunddan çıxılmır.
 - **Səs:** ☰ menyuda "🔈 Səsi yoxla" qısa test səsi çalır (oyun səsləri söndürülübsə belə — yalnız yoxlama). Səs aç/söndür seçimi yadda qalır. iPhone-da səssiz rejim açarı WebAudio səsini bağlaya bilər.
-- **Mikrofonla danışıq əlavə edilməyib.** Səbəb: WebRTC səsli danışığı real telefonlarda və mobil şəbəkələrdə sınamaq imkanım olmadı. Mobil operator şəbəkələrində birbaşa bağlantı çox vaxt alınmır və **TURN serveri** lazımdır. Nümunə xərclər (2026-cı il, saytlarından): Cloudflare Realtime TURN — ayda 1000 GB pulsuz, sonra 0,05 $/GB; Metered — pulsuz plan 0,5 GB, sonra ayda 99 $-dan. Səs təxminən 30–40 kbit/s/axın olduğundan dostlar arasında Cloudflare-in pulsuz həddi adətən kifayət edər, amma hesab, API açarı (server mühit dəyişəni) və real cihaz sınağı tələb olunur. İstəsəniz, ayrıca paketdə əlavə edə bilərəm.
+- **Səsli danışıq (v2.9, sınaq):** bax bölmə 9d.
+
+## 9d. Səsli danışıq (WebRTC, v3.0)
+- **Topologiya — tam mesh:** mikrofonu açmış hər oyunçu digər hər oyunçu ilə AYRICA bağlantı qurur; səs otaq sahibindən və ya serverdən keçmir. Server yalnız siqnalı (offer/answer/ICE) mövcud WebSocket ilə ötürür və göndərənlə alanın eyni otaqda və səsdə olduğunu yoxlayır. 4–5 nəfər üçün nəzərdə tutulub; 6–8 nəfərdə zəif telefon yüklənə bilər.
+- **Hər cüt üçün tək bağlantı:** təklifi yalnız İD-si kiçik olan göndərir; yenidən qoşulmada köhnə bağlantı bağlanıb yenisi qurulur (paralel bağlantı qalmır).
+- **v2.9-dakı (GPT ilk variantı) xətanın səbəbi:** otağa sonra girən oyunçular kimin səsdə olduğunu bilmirdi, ona görə bağlantı yalnız hamının tanıdığı oyunçu ilə (adətən otaq sahibi) qurulurdu — "hamı məni eşidir, amma bir-birini eşitmir". İndi server otağa girəndə, səsi açanda və yenidən qoşulanda bütün səs iştirakçılarını göndərir.
+- **🎤** (üst panel): ilk basışda mikrofon icazəsi soruşulur və qoşulur; sonra eyni düymə öz mikrofonunu səssizə alır / açır (🎙️ ↔ 🔇). ☰ menyu → "Səsli danışıqdan çıx". Otaqdan çıxanda səs bağlanır.
+- **Hər oyunçunun yanında 🔊/🔇** (avatarın sol-aşağı küncü): yalnız SİZİN cihazınızda həmin oyunçunun səsini kəsir / açır; onun mikrofonu və başqalarına gedən səs dəyişmir. Seçim otaqda qaldığınız müddətdə yadda qalır, otaqdan çıxanda sıfırlanır.
+- **Vəziyyət rəngləri:** yaşıl — mikrofonu açıqdır (danışanda avatar yaşıl parlayır); boz — mikrofonunu özü bağlayıb; sarı ⏳ — bağlantı qurulur; narıncı ⚠️ — bağlantı qurulmadı (aydın mesaj göstərilir, oyun davam edir); nişan yoxdur — səsə qoşulmayıb.
+- İcazə verilməsə, mikrofon tapılmasa və ya brauzer dəstəkləməsə — başa düşülən mesaj, oyun normal davam edir.
+- **TURN (mobil internet üçün vacib):** STUN çox vaxt eyni Wi-Fi-da kifayət edir, mobil operatorlarda (CGNAT) isə bəzi cütlər qoşulmaya bilər — onda TURN lazımdır. TURN qurulmayıbsa səs açılarkən bu barədə xəbərdarlıq çıxır və menyuda "TURN qurulmayıb" yazılır (işləyirmiş kimi göstərilmir). Render → Environment (biri kifayətdir):
+  - **Cloudflare (tövsiyə):** Cloudflare → Realtime → TURN → "Create TURN key". `CF_TURN_KEY_ID` və `CF_TURN_API_TOKEN`. Server hər qoşulmada 4 saatlıq müvəqqəti parol alır; gizli token brauzerə getmir. Ayda 1000 GB pulsuz, sonra 0,05 $/GB.
+  - **Öz coturn:** `TURN_URLS` və `TURN_SHARED_SECRET` (coturn-da `use-auth-secret`/`static-auth-secret`).
+- **iPhone Safari / Android:** səs elementləri `playsinline`, ilk toxunuşdan sonra dayanmış səs yenidən başladılır. iPhone-da ekran kilidlənəndə və ya başqa tətbiqə keçəndə Safari səsi kəsə bilər.
+- **Yoxlanılıb:** Chromium-da saxta mikrofonla, eyni kompüterdə 4 oyunçu tam mesh (`tools/ui-voice4.cjs`): hər kəs 3 nəfərlə ayrıca bağlı, səs hər istiqamətdə axır; lokal susdurma yalnız bir cihazda; öz mikrofonunu susdurmaq; WebSocket qırılıb bərpası; otaq sahibinin səsdən çıxması (qalanlar danışmağa davam edir); otaqdan çıxıb qayıtmaq. `tools/ui-voice.cjs` (3 oyunçu, icazəsiz oyunçu, sonradan girən), `test/voice.test.js` (server siqnalı).
+- **Yoxlanmayıb:** real iPhone/Android, mobil operator şəbəkələri, Cloudflare TURN-un özü, qulaqlıq/Bluetooth, ekran kilidi.
+
+## 9e. v3.0: növbə xəbərdarlığı, kart xalı, yeni raundun minimumu
+- **Növbə sizə keçəndə:** bir dəfə qısa vibrasiya (brauzer dəstəkləyirsə) və ekranda "🔔 Növbə sizdədir!" bildirişi. Yalnız səhifə açıq və görünən olanda; eyni növbə üçün təkrarlanmır. ☰ menyu → "📳 Növbə vibrasiyası" ilə söndürülür. iPhone Safari vibrasiyanı dəstəkləmir — orada menyuda "dəstəklənmir" yazılır, yalnız ekran bildirişi olur.
+- **Kart xalı:** kartlar tam açıq görünən kimi ("Göstər" və ya hər üç kartın küncündən baxdıqda) xal dərhal göstərilir — serverin cavabını gözləmədən, serverlə eyni qaydalarla (test 3000 təsadüfi əllə yoxlayır). Üzü bağlı kartda "? xal" qalır.
+- **Yeni raund:** xod məbləği əvvəlki raundda nə qədər olsa da (məs. 5000), yeni raundda və yeni əldə (seka) otağın minimum xodundan başlayır (serverdəki otaq ayarı). Balans, bank və tarixçə dəyişmir.
+
+## 9f. Profil ayarları, dərəcələr, admin toplu balans (v3.0)
+- **Profilim → Hesab ayarları:** görünən ad, telefon, şifrə. Hər dəyişiklik üçün **mövcud şifrə** serverdə yoxlanılır; yeni şifrə iki dəfə yazılır, scrypt + duz ilə saxlanılır, heç yerdə açıq göstərilmir; şifrə dəyişəndə digər cihazlardakı sessiyalar bağlanır. Yanlış şifrə cəhdləri məhdudlaşdırılıb (10 dəqiqədə 8).
+- **Telefon təsdiqi:** SMS xidməti qoşulmayıb — nömrə saxlanılır, "təsdiqlənməyib" kimi qalır, kod göndərilmir (işləyirmiş kimi göstərilmir).
+- **Profil şəkli:** əlavə et / dəyiş / sil; yalnız JPG/PNG/WebP, ən çox 2 MB; həm brauzerdə, həm serverdə (faylın özü oxunaraq) yoxlanılır.
+- **Dərəcələr** (balansdan ayrı): Yeni oyunçu (0) → Həvəskar (5) → Təcrübəli (20) → Peşəkar (50) → Ekspert (100) → Usta (200) → Çempion (400) → Əfsanə (700) — **dərəcəyə sayılan qələbə** sayı ilə. Profildə dərəcə, qələbə/məğlubiyyət/bölünmə və növbəti dərəcəyə qalan göstərilir.
+  - Sayılan qələbə: tamamlanmış real raund (botsuz, demo deyil), ən azı 2 insan, kimsə oyun haqqından əlavə xod/baxış edib (hamı dərhal pas desə sayılmır), eyni oyunçu tərkibi ilə 24 saatda ən çox 10 raund. Admin balansı sıfırlasa da dərəcə dəyişmir.
+  - Köhnə raundlar (v3.0-dan əvvəl) Migration 8 ilə `round_flows`-dan **təxmini** çıxarılıb (xalis + = qələbə).
+- **Admin → Ayarlar → "Bütün oyunçuların balansı"** (yalnız admin; moderator və oyunçu çağıra bilmir): "Hamısını 0-a sıfırla" və "Hamısına X xal ver". Əvvəl ön baxış (neçə hesab, cəmi məbləğ), sonra iki təsdiq. Server ön baxışdakı sayı yenidən yoxlayır, bir tranzaksiyada icra edir (ya hamısı, ya heç biri), təkrar sorğu ikinci dəfə icra olunmur. Yalnız aktiv oyunçu hesabları; admin/moderator daxil deyil. Real otaqlarda raund gedirsə icra olunmur. Hər hesabın tarixçəsinə qeyd, admin qeydiyyatına (kim, nə vaxt, nə, məbləğ, neçə hesab) yazılır. Oyun tarixçəsi, raund nəticələri, dərəcələr, borclar silinmir.
+- **"Masa kralı" hədiyyəsinin yeni animasiyası** (konsept şəkil əsasında, ~3,6 san): göndərən → alan adı; dörd kart (♥ ♦ ♣ ♠) yelpik kimi açılıb fırlanır, nişanlardan qızılı işıq izləri yuxarı axır və tac yaranır, tac alanın avatarına uçur, xırda qızılı xallar səpələnir. Yalnız transform/opacity (zəif telefonda daha az detal); "Animasiyalar: söndürülüb" və `prefers-reduced-motion` ilə yalnız bildiriş. Qiymət və xal serverdə bir dəfə tutulur.
+
+## 9g. Market və kolleksiya (v3.1) — yalnız virtual oyun xalı
+
+- Giriş: masada 🎁 → "🛒 Market" / "🎒 Kolleksiyam"; Profilim → "🎒 Kolleksiyam" və "⚙️ Hesab ayarları → 🛒 Market".
+- "Əşyalar": əşyanı seçin → təsdiq ekranı (çıxılacaq və qalacaq xal) → "Təsdiq et və al". Qiyməti və balansı server yoxlayır; təkrar klik və ya itmiş cavab xalı ikinci dəfə tutmur.
+- "Kolleksiyam": "İstifadə et" — ikon profil şəklinin yanında 2–3 saniyə görünür (otaqdasınızsa masadakılar da görür). Əşyalar dekorativdir: oyuna, qalib gəlmə şansına və nəticələrə təsir etmir.
+- Admin → "Market": ad, qiymət, satışda/deyil, şəkil. Real ödəniş, real məhsul sifarişi və pul çıxarışı yoxdur.
+
+## 9h. Yeni raunda razılıq (v3.1)
+
+- Otaq sahibi "Raundu başlat" basanda digər oyunçularda "Razıyam / Bu raundu burax" çıxır (15 saniyə). Razı olanlar oynayır; imtina edən və ya cavab verməyən bu raundu buraxır və ondan xal tutulmur. Azı 2 razı oyunçu lazımdır.
+
+## 9i. "Nəyəsə gəlir?", baxış nəticəsi, masada borc istəyi (v3.2)
+
+- **"Nəyəsə gəlir?"** — iki oyunçu qalanda növbəsi olan göndərir (növbədə bir dəfə). Təklif və cavab çatda hamıya görünür. Qarşı tərəf seçir: **½ bölək** (bank bərabər bölünür, raund bitir), **Seka** (5d-dəki seçimə keçir) və ya **Heç nəyə gəlmirəm, davam elə** (təklif bağlanır, növbəli oyunçu adi qaydada xod edir, pas deyir və ya baxış edir). 20 saniyədə cavab olmasa təklif rədd sayılır.
+- **Baxış nəticəsi** — az xallı uduzub çıxır (əvvəlki qayda). Baxış anındakı hər iki xal serverdə yadda saxlanılır; raund gedərkən digər oyunçulara göstərilmir və çata yazılmır (iki tərəf, əvvəlki kimi, bir-birinin kartını görür). Raund bitəndə nəticədə və jurnalda: "Yaqubun baxış vaxtı xalı 20 idi, Anarın — 17 (Yaqub qalib gəldi)".
+- **Masada borc istəyi** — borc verənin ekranında, masa ilə düymələr arasında kiçik bildiriş: "Anar sizdən (Yaqub) 200 xal borc istəyir", **Qəbul et / Rədd et**, 10 saniyəlik zolaq. Basılan kimi itir; 10 saniyədə cavab olmasa server istəyi avtomatik ləğv edir. Nəticə (qəbul/rədd/vaxt bitdi) istəyənə dərhal bildirilir. Məbləğ, balans və təkrar emal serverdə yoxlanılır (eyni açarla ikinci təsdiq ikinci köçürmə etmir). Masadan kənarda (profildən) göndərilən istəyin vaxt limiti yoxdur.
 
 ## 9b. iPhone-da yazı və klaviatura
 - Ekran artıq hər yenilənmədə bütövlükdə yenidən yaradılmır: kiçik "morph" funksiyası (`public/morph.js`) yalnız dəyişən hissələri yerində yeniləyir. Aktiv input və onun valideynləri DOM-dan çıxarılmır.
@@ -351,7 +397,7 @@ Kod və loglar yoxlanılıb; ehtimal olunan səbəblər və görülən iş:
 1. ZIP-i telefonda yükləyin və açın (Fayllar tətbiqi ilə).
 2. GitHub-da repository-ni açın → **Add file → Upload files** → `seka` qovluğunun **içindəki** bütün fayl və qovluqları seçin → **Commit changes**. (Codespaces istifadə edirsinizsə: repository → **Code → Codespaces → Create codespace**, faylları sol paneldəki fayl ağacına sürükləyin, sonra **Source Control → Commit → Sync/Push**.)
 3. Render özü deploy edir. Etməsə: Render → servis → **Manual Deploy → Deploy latest commit**.
-4. Logda bu sətri görməlisiniz: `Migration 7 yoxlanıldı/tətbiq edildi` (v2.8: "Şir" hədiyyəsi). Render-də **Settings → Health Check Path** sahəsinə `/health` yazmaq tövsiyə olunur. Yeni mühit dəyişəni, yeni paket və ya Build/Start əmri dəyişikliyi yoxdur.
+4. Logda bu sətri görməlisiniz: `Migration 8 yoxlanıldı/tətbiq edildi` (v3.0: dərəcələr, admin qeydiyyatı). Səsli danışıq üçün TURN dəyişənləri istəyə görədir — bax 9d (v2.8: "Şir" hədiyyəsi). Render-də **Settings → Health Check Path** sahəsinə `/health` yazmaq tövsiyə olunur. Yeni mühit dəyişəni, yeni paket və ya Build/Start əmri dəyişikliyi yoxdur.
 5. Brauzerdə saytı açın: başlıqda **Dairə** görünməlidir. Admin ilə daxil olub "Admin → Ayarlar"da oyunçuları yaradın.
 
 ## 11c. Linkdəki "seka" hissəsini dəyişmək (istəyə görə)
@@ -373,13 +419,3 @@ Kod Render ünvanını dəyişmir. `xxx-seka.onrender.com` kimi ünvanı dəyiş
 - `public/`: frontend modulları (`core`, `room`, `profile`, `admin`, `app`, DOM yeniləməsi `morph`, kartın küncündən baxma `peek`, bəzəklər `decor`, hədiyyə pəncərəsi `gifts`, hədiyyə animasiyaları `giftfx`), kartlar (`cards.js`), virtual əskinaslar (`notes.js`), animasiyalar (`fx.js`), səslər (`sound.js`) və xal (`score.js`).
 - Brauzer yoxlamaları (Playwright, istəyə görə): `tools/ui-layout.cjs` (13 ekran ölçüsü × 2–8 oyunçu, üst-üstə düşmə/ekrandan kənar/üfüqi sürüşmə), `tools/ui-v28.cjs` (xal, balans, onlayn status, çat, borc, Şir, yenidən qoşulma — özü test serveri başladır). Lokal test serveri: `tools/devserver.mjs` (yalnız yoxlama üçün, Render-də işə salmayın).
 - Testlər `test/` qovluğundadır. Hamısını işə salmaq üçün: `npm test`. PostgreSQL üzərində: `TEST_DATABASE_URL=postgres://... npm test` (`batch`, `finance`, `integration` və `money-integration` faylları).
-
-## Otaq daxili səs (ilk versiya)
-
-- Otaq üst panelindəki 🎤 düyməsi yalnız basıldıqda mikrofon icazəsi istəyir. Aktiv olandan sonra eyni düymə mikrofonu səssizə alır/açır.
-- Mikrofon icazəsi verilməsə oyun adi qaydada davam edir. Başqa səsə qoşulmuş oyunçunun yanında 🎙 nişanı görünür.
-- Media WebRTC ilə ötürülür, mövcud WebSocket yalnız offer/answer/ICE siqnallarını ötürür.
-- İlk versiya mesh-dir; 5 nəfərlə sınaq üçün nəzərdə tutulub. Yalnız STUN ilə bəzi mobil operatorlarda qoşulmaya bilər.
-- TURN-u əlavə etmək üçün TURN REST/shared-secret uyğun TURN xidməti lazımdır. Render-də `TURN_URLS` (vergüllə ayrılmış `turn:` ünvanları) və `TURN_SHARED_SECRET` (yalnız serverdə saxlanan gizli açar) environment dəyişənlərini yazın. TURN serveri həmin shared-secret açarla quraşdırılmalıdır. Gizli açarı GitHub-a və ya brauzerə qoymayın.
-- Səs transport səviyyəsində WebRTC SRTP ilə şifrələnir. Bu, SFU-da ayrıca E2EE təmin etmir.
-- iPhone Safari-də ekran kilidlənəndə və ya başqa tətbiqə keçəndə səs kəsilə bilər; brauzer buna zəmanət vermir.

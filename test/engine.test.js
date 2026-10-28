@@ -4,6 +4,10 @@ import { score3, handScore, isJackpot, jackpotKind } from '../server/game/cards.
 import { score3 as clientScore3 } from '../public/score.js';
 import { Round, GameError, TIMING } from '../server/game/engine.js';
 
+// v3.2: Sekaya keçəndə əvvəl "Bankı saxla / Pulu böl və 2× Seka" seçimi — köhnə testlər "Bankı saxla" ilə davam edir
+const keep = (rr, choice = 'keep') => { if (rr.phase === 'sekaChoice') { const p = rr.pending; const t = p.deadline - TIMING.DECISION_MS; rr.act(p.a, { type: 'sekaChoice', choice }, t); rr.act(p.b, { type: 'sekaChoice', choice }, t); } };
+
+
 // 'TS' -> {r:'T', s:'S'}, '10H' -> {r:'10', s:'H'}
 const c = (str) => ({ r: str.slice(0, -1), s: str.slice(-1) });
 const h = (str) => str.split(' ').map(c);
@@ -101,8 +105,8 @@ test('bölmə təklifi qəbul → bank yarı bölünür, kartlar açılmır', ()
   r.act(1, { type: 'xod', amount: 30 }, 0);
   r.act(2, { type: 'offerSplit' }, 0);
   assert.equal(r.phase, 'offer');
-  assert.throws(() => r.act(2, { type: 'offerAccept' }, 0), /cavab/);
-  r.act(1, { type: 'offerAccept' }, 0);
+  assert.throws(() => r.act(2, { type: 'offerAccept' }, 0), /cavab/); keep(r);
+  r.act(1, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.phase, 'finished');
   assert.equal(r.result.how, 'split');
   assert.equal(r.result.payouts[1], 25);
@@ -157,12 +161,13 @@ test('Seka təklifi qəbul → bank saxlanılır, 4 kart, oyunçu özü kart at�
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.phase, 'sekaJoin');
   const pot = r.pot;
   assert.equal(pot, 50);
+  assert.equal(r.sekaJoin.cost, 50); // v3.2 "Bankı saxla": qoşulma minimumu = bankdakı məbləğ
   r.act(3, { type: 'sekaJoin' }, 0);
-  assert.equal(r.pot, 70);
+  assert.equal(r.pot, 100);
   r.act(1, { type: 'sekaStart' }, 0);
   assert.equal(r.phase, 'discard');
   // hamı seçmədən xod olmaz
@@ -188,7 +193,7 @@ test('kart atma vaxtı bitdi → 4-cü kart avtomatik atılır (ən yaxşı seç
   const r = two();
   r.act(1, { type: 'xod', amount: 10 }, 0);
   r.act(2, { type: 'offerSeka' }, 0);
-  r.act(1, { type: 'offerAccept' }, 0);
+  r.act(1, { type: 'offerAccept' }, 0); keep(r);
   r.act(1, { type: 'sekaStart' }, 0);
   assert.equal(r.phase, 'discard');
   r.act(2, { type: 'discard', index: 0 }, 0);
@@ -207,7 +212,7 @@ test('kart atma zamanı oyunçu çıxsa oyun kilidlənmir', () => {
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   r.act(3, { type: 'sekaJoin' }, 0);
   r.act(2, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 3 }, 0);
@@ -223,14 +228,14 @@ test('kart atma zamanı oyunçu çıxsa oyun kilidlənmir', () => {
 test('sekada cəkpot saxlanılan 3 karta əsaslanır', () => {
   const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotSix: 100, jackpotAce: 100 });
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   r.act(1, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 0 }, 0); // 6S atdı → 6H 6D TC — cəkpot deyil
   r.act(2, { type: 'discard', index: 3 }, 0);
   assert.equal(r.phase, 'betting');
   const r2 = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: '6S 6H 6D TC', 2: '7H 8C 9D 10C' } }, { jackpotSix: 100, jackpotAce: 100 });
   r2.act(1, { type: 'offerSeka' }, 0);
-  r2.act(2, { type: 'offerAccept' }, 0);
+  r2.act(2, { type: 'offerAccept' }, 0); keep(r2);
   r2.act(1, { type: 'sekaStart' }, 0);
   r2.act(1, { type: 'discard', index: 3 }, 0); // TC atdı → 6-6-6 cəkpot
   r2.act(2, { type: 'discard', index: 3 }, 0);
@@ -246,9 +251,9 @@ test('bərabər xal qaydası qalır: son baxışma bərabər → seka/bölmə q�
   r.act(1, { type: 'baxis' }, 0);
   assert.equal(r.phase, 'tieDecision');
   assert.throws(() => r.act(1, { type: 'offerSplit' }, 0), /xod etmək olmaz/);
-  r.act(1, { type: 'tieVote', choice: 'seka' }, 0);
-  assert.throws(() => r.act(1, { type: 'tieVote', choice: 'bol' }, 0), /Artıq/);
-  r.act(2, { type: 'tieVote', choice: 'bol' }, 0);
+  r.act(1, { type: 'tieVote', choice: 'seka' }, 0); keep(r);
+  assert.throws(() => r.act(1, { type: 'tieVote', choice: 'bol' }, 0), /Artıq/); keep(r);
+  r.act(2, { type: 'tieVote', choice: 'bol' }, 0); keep(r);
   assert.equal(r.result.how, 'split');
   assert.equal(r.result.payouts[1], 25);
   assert.equal(r.result.shown.length, 2);
@@ -311,7 +316,7 @@ test('axınlar: bölmədə hər kəsin qoyduğu payı bankdan aldığı paya mü
   const r = two();
   r.act(1, { type: 'xod', amount: 30 }, 0); // P1: 40, P2: 10 → bank 50
   r.act(2, { type: 'offerSplit' }, 0);
-  r.act(1, { type: 'offerAccept' }, 0);
+  r.act(1, { type: 'offerAccept' }, 0); keep(r);
   // hər biri 25 alır: P1-in 40-ının yarısı (20) P2-yə, P2-nin 10-unun yarısı (5) P1-ə
   assert.deepEqual(flowsOf(r), { '1>2': 2000, '2>1': 500 });
 });
@@ -326,7 +331,7 @@ test('axınlar: seka daşınan bank, cəkpot, ləğv', () => {
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   r.act(3, { type: 'sekaSkip' }, 0);
   r.act(1, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 3 }, 0);
@@ -374,13 +379,19 @@ test('təsadüfi raundlar: pul itmir, oyun bitir, axınlar balansla uyğundur', 
         const id = r.turn;
         const opts = ['xod', 'xod', 'pas'];
         if (r.firstCircleDone()) opts.push('baxis', 'baxis');
-        if (r.active().length === 2 && !r.offerUsed) opts.push('offerSeka', 'offerSplit');
+        if (r.active().length === 2 && !r.offerUsed) opts.push('offerSeka', 'offerSplit', 'offerAny', 'offerAny');
         let t = opts[rnd(opts.length)];
         if (r.isSecretHolder(id) && t === 'pas') t = Math.random() < 0.5 ? 'jackpotOpen' : 'xod';
         if (r.secretAce && !r.secretAce.decided && Math.random() < 0.3) { r.act(r.secretAce.holder, { type: Math.random() < 0.5 ? 'jackpotHide' : 'jackpotOpen' }, 0); continue; }
         r.act(id, { type: t, amount: r.minXod() + (Math.random() < 0.3 ? 5 : 0), tieOffer: Math.random() < 0.5 }, 0);
       } else if (r.phase === 'offer') {
-        r.act(r.pending.to, { type: Math.random() < 0.5 ? 'offerAccept' : 'offerDecline' }, 0);
+        if (r.pending.kind === 'any') r.act(r.pending.to, { type: 'offerReply', choice: ['split', 'seka', 'no'][rnd(3)] }, 0);
+        else r.act(r.pending.to, { type: Math.random() < 0.5 ? 'offerAccept' : 'offerDecline' }, 0);
+      } else if (r.phase === 'sekaChoice') {
+        // v3.2: hər iki əsas oyunçu seçir (və ya vaxt bitir) — razılaşmayanda qayda tətbiq olunur
+        const p = r.pending;
+        if (Math.random() < 0.15) r.tick(p.deadline + 1);
+        else for (const id of [p.a, p.b]) if (!p.votes[id] && r.phase === 'sekaChoice') r.act(id, { type: 'sekaChoice', choice: Math.random() < 0.5 ? 'keep' : 'split' }, 0);
       } else if (r.phase === 'tieOffer') {
         r.act(r.pending.o, { type: Math.random() < 0.5 ? 'tieAccept' : 'tieDecline' }, 0);
       } else if (r.phase === 'tieDecision') {
@@ -425,7 +436,7 @@ test('2 Tuz = 22 xal; server və klient hesablaması eynidir', () => {
   }
   // sekada atılan kart sayılmır
   const r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC KC 7D' }, 2: { 1: 'TS TH 6H 6C', 2: '7H 8C 9D 10C' } });
-  r.act(1, { type: 'offerSeka' }, 0); r.act(2, { type: 'offerAccept' }, 0); r.act(1, { type: 'sekaStart' }, 0);
+  r.act(1, { type: 'offerSeka' }, 0); r.act(2, { type: 'offerAccept' }, 0); keep(r); r.act(1, { type: 'sekaStart' }, 0);
   r.act(1, { type: 'discard', index: 0 }, 0); // TS atıldı → TH 6H 6C = 12 (♥ 11+6=17)
   assert.equal(handScore(r.ps[1].cards), 17);
 });
@@ -500,7 +511,7 @@ test('gizli 3 Tuz: səsvermə pas etmir, vaxt bitəndə, baxışmada, çıxanda 
   // 2 nəfər: bölmə təklifi qəbul → əvvəl cəkpot açılır, bank sahibə
   r = mk(2, { 1: { 1: '7S 8C 9D', 2: 'TC TH TD' } }, { jackpotAce: 50 });
   r.act(1, { type: 'offerSplit' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.result.how, 'jackpot');
   assert.equal(r.result.payouts[2], 20);
 });
@@ -560,7 +571,7 @@ test('seka: 60 san qoşulma vaxtı; hüququ olan qərar verməyibsə erkən baş
   r.act(3, { type: 'pas' }, 0);
   r.act(4, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 1000);
+  r.act(2, { type: 'offerAccept' }, 1000); keep(r);
   assert.equal(r.phase, 'sekaJoin');
   assert.equal(r.sekaJoin.deadline, 1000 + 60_000);
   assert.deepEqual(r.viewFor(1, 1000).sekaJoin.waiting, [3, 4]);
@@ -568,7 +579,8 @@ test('seka: 60 san qoşulma vaxtı; hüququ olan qərar verməyibsə erkən baş
   const b3 = r.players.get(3).balance; const b4 = r.players.get(4).balance;
   r.act(3, { type: 'sekaJoin' }, 3000);
   assert.throws(() => r.act(3, { type: 'sekaJoin' }, 3000), /Artıq qoşulmusunuz/); // təkrar sorğu ikiqat çıxmır
-  assert.equal(r.players.get(3).balance, b3 - 20);
+  assert.equal(r.players.get(3).balance, b3 - r.sekaJoin.cost);
+  assert.equal(r.sekaJoin.cost, 60); // bankdakı məbləğ
   assert.throws(() => r.act(2, { type: 'sekaStart' }, 4000), /P4/);
   assert.equal(r.tick(1000 + 59_999), false);
   assert.equal(r.tick(1000 + 60_000), true);   // vaxt bitdi → qoşulanlarla davam
@@ -583,7 +595,7 @@ test('seka: hamı qərar verəndə (qoşulmuram daxil) erkən başlatmaq olur', 
   r.act(2, { type: 'xod', amount: 10 }, 0);
   r.act(3, { type: 'pas' }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   r.act(3, { type: 'sekaSkip' }, 0);
   assert.throws(() => r.act(3, { type: 'sekaJoin' }, 0), /bildirmisiniz/);
   r.act(2, { type: 'sekaStart' }, 0);

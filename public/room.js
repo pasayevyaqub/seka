@@ -11,7 +11,9 @@ import { decorHTML, FELT_MEDALLION } from './decor.js';
 import { peekCardHTML, peekedAll, hintNeeded } from './peek.js';
 import { ICON } from './giftfx.js';
 import { S, esc, fmt, avatarHTML, deadlineSpan, isDemo } from './core.js';
-import { voiceButtonHTML, peerVoiceActive } from './voice.js';
+import { loanAsksHTML, loanAskIds } from './loanask.js';
+import { vibrateSupported, vibrateOn } from './turnalert.js';
+import { voiceButtonHTML, voiceLeaveHTML, seatVoiceHTML, isSpeaking, peerVoiceActive } from './voice.js';
 
 export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
 const BUBBLE_MS = 3000;
@@ -131,7 +133,7 @@ function roomBar(room, fs) {
     <button class="rb-code" data-a="copyCode" title="Kodu kopyala" aria-label="Otaq kodu ${room.code}, kopyala">${room.hasPassword ? '🔒' : ''}${room.code}</button>
     <span class="rb-gap"></span>
     <button class="rb-btn" data-a="toggleSound" aria-label="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}" title="${isMuted() ? 'Səsi aç' : 'Səsi söndür'}">${isMuted() ? IC.mute : IC.sound}</button>
-    ${voiceButtonHTML()}
+    ${room.demo ? '' : voiceButtonHTML()}
     <button class="rb-btn" data-a="${fs ? 'fsExit' : 'fsEnter'}" aria-label="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}" title="${fs ? 'Tam ekrandan çıx' : 'Tam ekran'}">${fs ? IC.fsx : IC.fs}</button>
     ${canCredit
       ? `<button class="rb-bal" data-a="creditModal" title="Virtual oyun balansı — kredit istəmək üçün toxunun" aria-label="Balans ${fmt(bal)}, kredit istə">${balInner}</button>`
@@ -201,7 +203,8 @@ function renderSeat(p, i, n, myIdx, room, ord) {
   const put = !isMe && r && p.inHand && p.put ? `<span class="put" title="Bu raundda banka qoyduğu">🪙${fmt(p.put).replace(' xal', '')}</span>` : '';
   const extra = (p.score != null && !isMe ? `<span class="sc-score">${p.score} xal</span>` : '')
     + (p.creditPut ? `<span class="credit-chip" title="Borca (şərti) qoyuluş">🧾 ${fmt(p.creditPut)}</span>` : '');
-  return `<div class="seat s-${pos.side} ${pos.top ? 'pt' : ''} ${isMe ? 'me' : ''} ${isTurn ? 'turn' : ''} ${out ? 'out' : ''} ${won ? 'won' : ''} ${online || p.isBot ? '' : 'offline'}"
+  const speak = !p.isBot && isSpeaking(isMe ? 'me' : p.id);
+  return `<div class="seat s-${pos.side} ${pos.top ? 'pt' : ''} ${isMe ? 'me' : ''} ${speak ? 'speaking' : ''} ${!isMe && peerVoiceActive(p.id) ? 'in-voice' : ''} ${isTurn ? 'turn' : ''} ${out ? 'out' : ''} ${won ? 'won' : ''} ${online || p.isBot ? '' : 'offline'}"
       style="--x:${pos.x.toFixed(2)}%;--y:${pos.y.toFixed(2)}%;--wx:${pos.wx.toFixed(2)}%;--wy:${pos.wy.toFixed(2)}%" data-seat="${p.id}">
     <div class="av" ${giftable ? `data-a="playerMenu" data-id="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)} — hədiyyə, borc istə, borc təklif et" title="Hədiyyə / borc"` : ''}>
       ${seatTimer(p, r, room)}
@@ -209,7 +212,7 @@ function renderSeat(p, i, n, myIdx, room, ord) {
       ${room.hostId === p.id ? '<span class="host" title="Otaq sahibi">👑</span>' : ''}
       ${p.isBot ? '<span class="botmark" title="Bot">BOT</span>' : ''}
       ${dot}
-      ${!p.isBot && peerVoiceActive(p.id) ? '<span class="voice-peer" title="Mikrofona qoşulub" aria-label="Səsə qoşulub">🎙</span>' : ''}
+      ${!p.isBot && !room.demo ? seatVoiceHTML(p.id, isMe) : ''}
       ${statusTag(p, r)}
       <div class="bubble-slot">${bubbleHTML(p.id)}</div>
     </div>
@@ -248,6 +251,19 @@ function centerHTML(room) {
 }
 
 // ---------------- nəticə ----------------
+// yiyəlik hal (server mühərriki ilə eyni qayda): Yaqub → Yaqubun, Anar → Anarın
+function genitiveAz(name) {
+  const n = String(name || '').trim();
+  const lower = n.toLocaleLowerCase('az');
+  const last = lower.slice(-1);
+  if (/[0-9]/.test(last)) return `${n}-${['ın', 'in', 'nin', 'ün', 'ün', 'in', 'nın', 'nin', 'in', 'un'][Number(last)]}`;
+  if (!/\p{L}/u.test(last)) return `${n}-in`;
+  let v = '';
+  for (const ch of lower) if ('aıoueəiöü'.includes(ch)) v = ch;
+  const suf = { a: 'ın', ı: 'ın', o: 'un', u: 'un', e: 'in', ə: 'in', i: 'in', ö: 'ün', ü: 'ün' }[v] || 'in';
+  return n + ('aıoueəiöü'.includes(last) ? 'n' : '') + suf;
+}
+
 function resultHTML(r) {
   if (!r?.result || r.phase !== 'finished') return '';
   const res = r.result;
@@ -266,6 +282,11 @@ function resultHTML(r) {
       html += '<div class="shown-line">' + res.shown.map((x) => `<span class="${res.winners.includes(x.id) ? 'w' : ''}">${esc(x.name)} — ${x.score} xal${res.winners.includes(x.id) ? ' 🏆' : ''}</span>`).join(' · ') + '</div>';
     } else if (res.how === 'last' || res.how === 'split') {
       html += '<div class="muted" style="font-size:13px">Kartlar açılmadı.</div>';
+    }
+    // baxış nəticələri: baxış anındakı xallar yalnız raund bitəndə göstərilir
+    for (const x of res.compares || []) {
+      const w = x.winner == null ? 'bərabər' : `${esc(x.winner === x.a ? x.aName : x.bName)} qalib gəldi`;
+      html += `<div class="cmp-line">👁 ${esc(genitiveAz(x.aName))} baxış vaxtı xalı <b>${x.aScore}</b> idi, ${esc(genitiveAz(x.bName))} — <b>${x.bScore}</b> (${w})</div>`;
     }
   }
   return html + '</div>';
@@ -298,13 +319,37 @@ function actionsHTML(room) {
       : `<div class="notice">Otaq sahibinin raundu başlatmasını gözləyin…</div>`);
   };
 
+  // yeni raunda razılıq: soruşulana "Razıyam / Bu raundu burax", digərlərinə kimin cavab verdiyi
+  const consentHTML = (rm) => {
+    const c = rm.consent;
+    const name = (id) => esc(rm.members.find((m) => m.id === id)?.name ?? '?');
+    const status = [c.hostId, ...c.ask].map((id) => {
+      const st = c.yes.includes(id) ? 'yes' : c.no.includes(id) ? 'no' : 'wait';
+      return `<span class="cs-chip ${st}">${st === 'yes' ? '✓' : st === 'no' ? '✕' : '…'} ${name(id)}</span>`;
+    }).join('');
+    const timer = `<span data-secs="${c.deadline}" data-unit=" san"></span>`;
+    if (c.mine === 'wait') {
+      return `<div class="consent-box ask" role="alertdialog" aria-label="Yeni raund">
+        <b>🃏 ${name(c.hostId)} yeni raund başladır</b>
+        <div>Oyun haqqı: <b>${fmt(rm.settings.ante)}</b>${rm.practice ? ' (demo xalı)' : ''}. Qoşulursunuz? ${timer}</div>
+        <div class="big2"><button class="bb start" data-a="consentYes">Razıyam</button><button class="bb gear" data-a="consentNo">Bu raundu burax</button></div>
+        <div class="muted" style="font-size:12px">Cavab verməsəniz bu raundda iştirak etmirsiniz və sizdən xal tutulmur.</div>
+      </div>`;
+    }
+    return `<div class="consent-box">
+      <b>⏳ Oyunçuların razılığı gözlənilir</b> ${timer}
+      <div class="cs-row">${status}</div>
+      ${c.mine === 'no' ? '<div class="muted" style="font-size:12px">Bu raundu buraxdınız — növbəti raundda yenidən soruşulacaq.</div>' : ''}
+    </div>`;
+  };
+
   // gizli 3 Tuz — yalnız sahibinə görünür
   const sj = me?.secretJackpot;
   const secret = sj ? `<div class="secret-jp">🎉 <b>Sizdə 3 Tuz var!</b> Cəkpot: hər rəqibdən ${fmt(sj.amount)} (balansı qədər). ${sj.decided ? 'Gizli saxlayırsınız — istədiyiniz an aça bilərsiniz; raundun sonunda avtomatik açılacaq.' : 'Seçin:'}
     <div class="row mt"><button class="btn primary" data-a="jackpotOpen">Cəkpotu aç</button>${sj.decided ? '' : '<button class="btn" data-a="jackpotHide">Gizli saxla, davam et</button>'}</div>
     <div class="muted" style="font-size:12px">Cəkpot sahibi pas edə bilməz. Vaxt bitsə və ya xoda balans çatmasa cəkpot avtomatik açılır.</div></div>` : '';
 
-  if (!r || r.phase === 'finished') return resultHTML(r) + hostControls();
+  if (!r || r.phase === 'finished') return resultHTML(r) + (room.consent ? consentHTML(room) : hostControls());
 
   if (r.phase === 'discard') {
     if (me?.mustDiscard) {
@@ -321,6 +366,9 @@ function actionsHTML(room) {
       const min = r.minXod;
       const myBal = r.players.find((p) => p.id === uid)?.balance ?? 0;
       const max = Math.min(myBal, r.maxBet > 0 ? Math.max(r.maxBet, min) : Infinity);
+      // yeni raund / yeni əl: xod məbləği əvvəlki raunddakı (məs. 5000) deyil, otağın minimumundan başlayır
+      const betKey = `${room.code}:${room.roundSeq ?? ''}:${r.handNo}`;
+      if (S.betKey !== betKey) { S.betKey = betKey; S.bet = null; }
       if (S.bet == null || S.bet < min || S.bet > max) S.bet = Math.min(min, max);
       const low = !me.canAffordMin && !me.canCreditOffer ? (real ? lowBalanceHTML(min) : `<div class="notice">Məşq balansınız ${fmt(min)} üçün çatmır.</div>`) : '';
       const d = r.creditDeal;
@@ -344,8 +392,7 @@ function actionsHTML(room) {
         <div class="hint">${me.canBaxis ? `Baxış: ${nameOf(me.baxisTarget)} · ${fmt(min)}` : esc(me.baxisHint || 'Baxış hələ mümkün deyil.')}</div>
         ${me.canBaxis && r.activeCount > 2 ? `<label class="check"><input type="checkbox" id="tieOffer" ${S.tieOffer ? 'checked' : ''}> Baxışda "eyni xala baxaq" təklif et</label>` : ''}
         ${r.activeCount === 2 ? `<div class="offer2">
-          <button class="ob" data-a="offerSeka" ${me.canOffer ? '' : 'disabled'} title="2 oyunçu qalanda, raundda bir dəfə">🤝 Seka təklif et</button>
-          <button class="ob" data-a="offerSplit" ${me.canOffer ? '' : 'disabled'} title="2 oyunçu qalanda, raundda bir dəfə">½ Bankı bölək</button></div>` : ''}`;
+          <button class="ob wide" data-a="offerAny" ${me.canOffer ? '' : 'disabled'} title="Qarşı tərəf seçir: ½ bölək, Seka və ya davam. Növbədə bir dəfə.">🤝 Nəyəsə gəlir?</button></div>` : ''}`;
     }
     if (me?.status === 'active') {
       const d2 = r.creditDeal;
@@ -372,6 +419,20 @@ function actionsHTML(room) {
     }
     if (p.from === uid) return `<div class="credit-offer"><div>Borca oyun təklifiniz göndərildi — ${nameOf(p.to)} cavab verir… <span data-secs="${p.deadline}" data-unit=" san"></span></div><div class="co-terms">${terms}</div><div class="muted" style="font-size:12px">Növbə vaxtınız gözləmə müddətində dayanıb.</div></div>`;
     return `<div class="notice">${nameOf(p.from)} ${nameOf(p.to)}-a borca oyun təklif edib… ${deadlineSpan(p.deadline)}</div>`;
+  }
+
+  if (r.phase === 'offer' && r.pending.kind === 'any') {
+    const p = r.pending;
+    if (p.to === uid) {
+      return `${secret}<div class="notice"><b>${nameOf(p.from)}</b>: "Nəyəsə gəlir?" — seçin. ${deadlineSpan(p.deadline)}</div>
+        <div class="any-reply">
+          <button class="bb baxis" data-a="offerReply" data-v="split">½ bölək</button>
+          <button class="bb xod" data-a="offerReply" data-v="seka">Seka</button>
+          <button class="bb gear" data-a="offerReply" data-v="no">Heç nəyə gəlmirəm, davam elə</button>
+        </div>`;
+    }
+    if (p.from === uid) return `${secret}<div class="notice">"Nəyəsə gəlir?" göndərildi — ${nameOf(p.to)} seçir (½ bölək / Seka / davam)… ${deadlineSpan(p.deadline)}</div>`;
+    return `<div class="notice">${nameOf(p.from)}: "Nəyəsə gəlir?" — ${nameOf(p.to)} seçir… ${deadlineSpan(p.deadline)}</div>`;
   }
 
   if (r.phase === 'offer') {
@@ -404,14 +465,33 @@ function actionsHTML(room) {
     return `<div class="notice">${nameOf(p.a)} və ${nameOf(p.b)} bərabərdir — qərar gözlənilir… ${deadlineSpan(p.deadline)}</div>`;
   }
 
+  if (r.phase === 'sekaChoice') {
+    const p = r.pending;
+    const mine = p.a === uid || p.b === uid;
+    const head = `<div class="seka-join"><div class="sj-head"><b>SEKA!</b> Bankda: <b>${fmt(p.pot)}</b></div>
+      <div class="sj-rule"><b>Bankı saxla</b> — bank tam qalır və seka əlinə keçir; sonradan qoşulan oyunçu bankdakı məbləğ qədər (<b>${fmt(p.pot)}</b>) qoyur.<br>
+      <b>Pulu böl və 2× Seka oyna</b> — bank ${nameOf(p.a)} və ${nameOf(p.b)} arasında yarıya bölünür (hərəyə ~${fmt(Math.floor(p.pot / 2))}), seka əlində hər iştirakçı <b>${fmt(p.splitCost)}</b> (2 × oyun haqqı) qoyur.<br>
+      <span class="muted">Razılaşmasanız xalı çox olanın, xallar bərabərdirsə təklifi alanın seçimi tətbiq olunur.</span></div>
+      <div class="sj-timer">Qalan vaxt: <b data-secs="${p.deadline}" data-unit=" san"></b></div></div>`;
+    if (mine && !p.myVote) {
+      return head + `<div class="big2"><button class="bb gear" data-a="sekaChoice" data-v="keep">🏦 Bankı saxla</button><button class="bb xod" data-a="sekaChoice" data-v="split">💰 Pulu böl və 2× Seka oyna</button></div>`;
+    }
+    if (mine) return head + `<div class="notice">Seçiminiz: <b>${p.myVote === 'keep' ? 'Bankı saxla' : 'Pulu böl və 2× Seka oyna'}</b> — qarşı tərəf gözlənilir…</div>`;
+    return head + `<div class="notice">${nameOf(p.a)} və ${nameOf(p.b)} seçir…</div>`;
+  }
+
   if (r.phase === 'sekaJoin') {
     const sjn = r.sekaJoin;
     const joined = sjn.joined.map(nameOf).join(', ') || 'hələ heç kim';
     const waiting = sjn.waiting || [];
     const canDecide = sjn.eligible.includes(uid) && !sjn.joined.includes(uid) && !(sjn.skipped || []).includes(uid);
     let html = `<div class="seka-join">
-      <div class="sj-head"><b>SEKA!</b> Bank (<b>${fmt(sjn.carried ?? r.pot)}</b>) bölünmür — tam həcmi ilə seka əlinə keçir.</div>
-      <div class="sj-rule">${sjn.base.map(nameOf).join(' və ')} əlavə ödəmir. Bu raundda iştirak edib pas deyən oyunçu <b>${fmt(sjn.cost)}</b> (2 × oyun haqqı) qoyub qoşula bilər. Raund gedərkən otağa gələn oyunçu bu sekaya qoşulmur — növbəti yeni raunddan oynayır.</div>
+      ${sjn.mode === 'split'
+        ? `<div class="sj-head"><b>SEKA (2×)!</b> Bank bölündü. İndiki bank: <b>${fmt(r.pot)}</b></div>
+      <div class="sj-rule">${sjn.base.filter((x) => !(sjn.baseOut || []).includes(x)).map(nameOf).join(' və ')} hərəsi ${fmt(sjn.cost)} qoydu. Bu raundda iştirak edib pas deyən oyunçu <b>${fmt(sjn.cost)}</b> (2 × oyun haqqı) qoyub qoşula bilər.</div>`
+        : `<div class="sj-head"><b>SEKA!</b> Bank saxlanılır (<b>${fmt(sjn.carried ?? r.pot)}</b>) — tam həcmi ilə seka əlinə keçir.</div>
+      <div class="sj-rule">${sjn.base.map(nameOf).join(' və ')} əlavə ödəmir. Qoşulmaq üçün minimum bankdakı məbləğ qədər: <b>${fmt(sjn.cost)}</b>.</div>`}
+      <div class="sj-rule muted">Raund gedərkən otağa gələn oyunçu bu sekaya qoşulmur — növbəti yeni raunddan oynayır.</div>
       <div class="sj-timer">Qalan vaxt: <b data-secs="${sjn.deadline}" data-unit=" san"></b></div>
       <div class="sj-meta">Qoşulanlar: ${joined}${waiting.length ? ` · Gözlənilir: ${waiting.map(nameOf).join(', ')}` : ''}</div></div>`;
     if (canDecide) html += `<div class="big2"><button class="bb xod" data-a="sekaJoin">Sekaya qoşul (${fmt(sjn.cost)})</button><button class="bb pas" data-a="sekaSkip">Qoşulmuram</button></div>`;
@@ -453,7 +533,10 @@ function myHandHTML(r, ord, room) {
   if (pickPhase) {
     const keep = S.pick != null ? me.hand.filter((_, i) => i !== S.pick) : null;
     badge = `<div class="xal-badge ${keep && seenAll ? '' : 'dim'}">${keep ? (seenAll ? `${score3(keep)} xal` : 'Seçildi — təsdiqləyin') : 'Atılacaq kartı seçin'}</div>`;
-  } else if (me.score != null && (seenAll || finished || me.looked)) badge = `<div class="xal-badge">${me.score} xal</div>`;
+  } else if ((seenAll || finished || me.looked) && (me.score != null || me.cards)) {
+    // kart üzü tam görünən kimi xal dərhal göstərilir: serverin "look" cavabını gözləmədən, eyni qaydalarla (score3 = server)
+    badge = `<div class="xal-badge">${me.score ?? score3(me.cards)} xal</div>`;
+  }
   else if (!finished) badge = `<div class="xal-badge dim hidden-score" aria-label="Xal gizlidir — kartlara baxın">? xal</div>`;
   const eye = finished ? '' : `<button class="eye-btn ${open ? 'on' : ''}" data-a="toggleShowHand" data-hand="${hand}" aria-pressed="${open}" aria-label="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər'}" title="${open ? 'Kartlarımı ört' : 'Öz kartlarımı göstər (yalnız sizə)'}">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${open
@@ -469,7 +552,8 @@ function myHandHTML(r, ord, room) {
 // ---------------- masada borc təklifləri (mənim cavabımı gözləyən) ----------------
 function loanStripHTML(room) {
   if (room.practice) return '';
-  const n = (S.pendingLoans || []).filter((l) => l.mine).length;
+  const live = loanAskIds(); // ekranda bildiriş kartı olanlar ayrıca sayılmır
+  const n = (S.pendingLoans || []).filter((l) => l.mine && !live.has(l.id)).length;
   if (!n) return '';
   return `<button class="loan-strip" data-a="loansModal">🤝 <b>${n}</b> borc ${n === 1 ? 'təklifi/istəyi' : 'təklifi/istəyi'} cavabınızı gözləyir — bax</button>`;
 }
@@ -499,7 +583,7 @@ function socialHTML(room) {
       <form data-form="chat" id="chatForm" class="chat-form" autocomplete="off">
         <input id="chatInput" name="text" maxlength="120" placeholder="Mesaj yaz…" enterkeyhint="send" aria-label="Çat mesajı">
       </form>
-      ${room.practice ? '' : '<button class="sb-btn gift" data-a="giftPickTarget" aria-label="Hədiyyə göndər" title="Hədiyyə göndər">🎁</button>'}
+      ${isDemo() ? '' : '<button class="sb-btn gift" data-a="tableGiftMenu" aria-label="Hədiyyə və market" title="Hədiyyə və market">🎁</button>'}
       <button class="sb-btn send" type="submit" form="chatForm" aria-label="Mesajı göndər">➤</button>
     </div>
     ${S.emojiOpen ? `<div class="emoji-tray">${emojiBtns}</div>` : ''}
@@ -514,6 +598,10 @@ function socialHTML(room) {
         <button class="tgl ${isMuted() ? '' : 'on'}" data-a="toggleSound" aria-pressed="${!isMuted()}">${isMuted() ? '🔇' : '🔊'} Səs: <b>${isMuted() ? 'söndürülüb' : 'açıq'}</b></button>
         <button class="tgl ${animationsOff() ? '' : 'on'}" data-a="toggleAnim" aria-pressed="${!animationsOff()}">✨ Animasiyalar: <b>${animationsOff() ? 'söndürülüb' : 'açıq'}</b></button>
         <button class="tgl" data-a="soundTest">🔈 Səsi yoxla</button>
+        ${vibrateSupported()
+          ? `<button class="tgl ${vibrateOn() ? 'on' : ''}" data-a="toggleVibrate" aria-pressed="${vibrateOn()}">📳 Növbə vibrasiyası: <b>${vibrateOn() ? 'açıq' : 'söndürülüb'}</b></button>`
+          : '<div class="tgl muted" aria-disabled="true">📳 Vibrasiya bu brauzerdə dəstəklənmir (növbə bildirişi ekranda görünür)</div>'}
+        ${voiceLeaveHTML()}
       </div>
       ${room.practice ? '' : '<div class="muted" style="font-size:12px">🎁 Hədiyyə: oyunçunun şəklinə və ya 🎁 düyməsinə toxunun.</div>'}
       <div class="dr-head"><b>Çat</b></div>
@@ -548,6 +636,7 @@ export function renderRoom(_topbar, isFs) {
       </div>
     </div>
     <div class="side">
+      ${loanAsksHTML()}
       ${loanStripHTML(room)}
       <div class="ctrl">${actionsHTML(room)}</div>
       ${room.practice ? '' : giftTickerHTML()}

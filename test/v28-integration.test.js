@@ -47,7 +47,12 @@ class Client {
   constructor(cookie) {
     this.msgs = [];
     this.ws = new WebSocket(base.replace('http', 'ws') + '/ws', { headers: { cookie } });
-    this.ws.on('message', (d) => this.msgs.push(JSON.parse(d.toString())));
+    this.autoConsent = true; // v3.1: yeni raunda razılıq — test oyunçusu avtomatik "Razıyam" deyir (əl ilə yoxlanış: autoConsent=false)
+    this.ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      this.msgs.push(m);
+      if (m.t === 'room' && m.room.consent?.mine === 'wait' && this.autoConsent && this.ws.readyState === 1 && this.consentSent !== `${m.room.code}:${m.room.consent.id}`) { this.consentSent = `${m.room.code}:${m.room.consent.id}`; this.ws.send(JSON.stringify({ t: 'consent', yes: true })); }
+    });
     this.ready = new Promise((res, rej) => { this.ws.on('open', res); this.ws.on('error', rej); });
   }
   send(m) { this.ws.send(JSON.stringify(m)); }
@@ -85,7 +90,8 @@ test('balans məxfiliyi: WebSocket-də başqasının dəqiq balansı yoxdur (ota
   assert.equal(r.members.find((m) => m.id === ids[1]).balance, null);
   assert.equal(r.round.players.find((p) => p.id === ids[1]).balance, null);
   const raw = JSON.stringify(A.msgs);
-  assert.ok(!raw.includes('668') && !raw.includes('678'), 'B-nin balansı A-ya heç bir mesajda getməyib');
+  // B-nin balansı (678 → raundda 668) A-ya heç bir "balance" sahəsində getməyib
+  assert.ok(!/"balance":6[67]8\b/.test(raw), 'B-nin balansı A-ya heç bir mesajda getməyib');
   await leaveAll(cs);
 });
 

@@ -17,6 +17,7 @@ export const EMOJIS = ['😂', '😎', '😡', '👏', '🤝', '🔥', '😭'];
 const EMOJI_GAP_MS = 3000;
 const CHAT_GAP_MS = 1500;
 const CHAT_MAX = 120;
+export const CONSENT_MS = 15_000;          // yeni raunda razılıq üçün vaxt
 const CHAT_KEEP = 100;                   // otaqda saxlanılan son mesajlar (yaddaşda, bazada yox)
 const ROOM_TASK_WARN_MS = 10_000;        // otaq növbəsində bundan uzun çəkən iş loga yazılır (donma diaqnostikası)
 
@@ -53,11 +54,26 @@ function cleanRoomPassword(pw) {
   return hashPassword(p);
 }
 
+// Dərəcə üçün raund nəticəsi (hər insan iştirakçı): qələbə / bölünmə / məğlubiyyət + xalis dəyişiklik.
+// "real" = kimsə oyun haqqından əlavə xod və ya baxış edib (hamı dərhal pas desə raund dərəcəyə sayılmır).
+function roundResults(r) {
+  const ids = Object.keys(r.contrib).map(Number).filter((id) => id > 0);
+  if (ids.length < 2) return [];
+  const pot = Object.values(r.contrib).reduce((a, b) => a + b, 0);
+  const real = pot > r.settings.ante * Object.keys(r.contrib).length;
+  const winners = new Set(r.result.winners || []);
+  const net = new Map(ids.map((id) => [id, -(r.contrib[id] || 0) + (r.result.payouts?.[id] || 0)]));
+  for (const f of r.jackpotFlows || []) { if (net.has(f.to)) net.set(f.to, net.get(f.to) + f.cents / 100); if (net.has(f.from)) net.set(f.from, net.get(f.from) - f.cents / 100); }
+  const multi = winners.size > 1;
+  return ids.map((id) => ({ userId: id, outcome: winners.has(id) ? (multi ? 'split' : 'win') : 'loss', net: Math.round(net.get(id)), real }));
+}
+
 let botSeq = 0; // bot id-ləri mənfi ədədlərdir (DB istifadəçiləri ilə qarışmır)
 
 export class RoomManager {
-  constructor(store, { botDelay = [700, 1600], tickMs = 1000, retryFast = RETRY_FAST_MS, retrySlow = RETRY_SLOW_MS } = {}) {
+  constructor(store, { botDelay = [700, 1600], tickMs = 1000, retryFast = RETRY_FAST_MS, retrySlow = RETRY_SLOW_MS, consentMs = CONSENT_MS } = {}) {
     this.store = store;
+    this.consentMs = consentMs;
     this.botDelay = botDelay;
     this.retryFast = retryFast;
     this.retrySlow = retrySlow;
@@ -149,6 +165,7 @@ export class RoomManager {
     this.mustNotBlocked(room);
     if (room.hostId !== userId) throw new GameError(`${what} yalnız otaq sahibi edə bilər.`);
     if (this.roundRunning(room)) throw new GameError('Raund gedərkən bunu etmək olmaz — raund bitsin.');
+    if (room.consent) throw new GameError('Oyunçuların razılığı gözlənilir — bir az sonra yenidən cəhd edin.');
   }
 
   say(room, msg) {
@@ -324,6 +341,8 @@ export class RoomManager {
       });
     }
     if (m) this.say(room, `${m.name} otağı tərk etdi.`);
+    const c = room.consent;
+    if (c && (c.hostId === userId || this.consentDone(room, c))) this.runQ(room, () => this._finishConsent(room, c)).catch(() => {});
     const humans = this.humans(room);
     if (!humans.length) return this.enqueue(room, () => this.closeRoom(room));
     if (room.hostId === userId) room.hostId = humans[0].id;
@@ -332,6 +351,7 @@ export class RoomManager {
 
   async closeRoom(room) {
     if (!this.rooms.has(room.code)) return;
+    if (room.consent) { clearTimeout(room.consent.timer); room.consent = null; }
     clearTimeout(room.botTimer);
     room.botTimer = null;
     // təsdiqlənməmiş paket varsa otaq silinmir: əvvəl yazılmalıdır (sonra avtomatik bağlanır)
@@ -402,11 +422,31 @@ export class RoomManager {
     this.bubble(room, { userId, kind: 'text', value: msg, name: m?.name, ts: t });
   }
 
+  /** v3.2: oyunun özünün çata yazdığı mesajlar ("Nəyəsə gəlir?" və cavabı) — hamı görür, sürət limiti tətbiq olunmur */
+  drainGameChat(room) {
+    const r = room.round;
+    if (!r?.chatOut?.length) return;
+    for (const c of r.chatOut.splice(0)) {
+      const m = room.members.get(c.userId);
+      const t = Date.now();
+      const text = String(c.text).slice(0, CHAT_MAX);
+      room.chatMsgs = room.chatMsgs || [];
+      room.chatMsgs.push({ t, userId: c.userId, name: m?.name ?? '?', text });
+      if (room.chatMsgs.length > CHAT_KEEP) room.chatMsgs.shift();
+      this.bubble(room, { userId: c.userId, kind: 'text', value: text, name: m?.name, ts: t });
+    }
+  }
+
   // yalnız otaq üzvlərinə; masa vəziyyətini yenidən göndərmir (formalar sıfırlanmır)
   /** Masa hədiyyəsi animasiyası — YALNIZ bazada uğurla yazılmış əməliyyatdan sonra, otaqdakı insanlara bir dəfə göndərilir.
    *  Yaddaşda saxlanılmır: yenidən qoşulan klient köhnə animasiyaları almır. */
   giftEvent(room, ev) {
     for (const id of room.members.keys()) if (id > 0) this.send(id, { t: 'tgift', ...ev, at: Date.now() });
+  }
+
+  /** Marketdən alınmış virtual əşyanın istifadəsi — yalnız otaq üzvlərinə, yaddaşda saxlanılmır, oyuna təsiri yoxdur */
+  itemEvent(room, ev) {
+    for (const id of room.members.keys()) if (id > 0) this.send(id, { t: 'itemUse', ...ev, at: Date.now() });
   }
 
   bubble(room, b) {
@@ -447,17 +487,74 @@ export class RoomManager {
   }
 
   // ---------- raund ----------
+  // Yeni raund: otaq sahibi "Başla" basır (bu, onun razılığıdır) → masadakı digər insanlardan razılıq istənilir.
+  // Razı olanlar oynayır; imtina edən və ya CONSENT_MS ərzində cavab verməyən bu raundu buraxır və ondan xal tutulmur.
   async startRound(userId) {
     const room = this.roomOf(userId);
     // balanslar oxunduğu anla raund yaradılan an arasında başqa pul əməliyyatı keçməsin deyə növbədə icra olunur
-    return this.runQ(room, () => this._startRound(room, userId));
+    return this.runQ(room, () => this._requestStart(room, userId));
   }
 
-  async _startRound(room, userId) {
+  async _requestStart(room, userId) {
+    if (this.rooms.get(room.code) !== room) throw new GameError('Otaq bağlanıb.');
+    if (room.hostId !== userId) throw new GameError('Raundu yalnız otaq sahibi başlada bilər.');
+    if (this.roundRunning(room)) throw new GameError('Raund artıq gedir.');
+    if (room.consent) throw new GameError('Oyunçuların razılığı artıq gözlənilir.');
+    this.mustNotBlocked(room);
+    if (this.bulkBusy && !this.isPractice(room)) throw new GameError('Admin balans əməliyyatı icra olunur — bir neçə saniyə sonra yenidən başladın.');
+    const ask = room.seats.filter((id) => id !== userId && id > 0 && room.members.get(id)?.connected);
+    if (!ask.length) return this._startRound(room, userId); // yalnız sahib (+ botlar): razılıq artıq verilib
+    // əvvəlcədən yoxlama: balansı oyun haqqına çatan 2 oyunçu yoxdursa razılıq soruşmağın mənası yoxdur
+    if (!this.isPractice(room)) {
+      let can = 0;
+      for (const id of [userId, ...ask]) { const u = await this.store.getUser(id); if (u && u.status === 'approved' && Number(u.balance) >= room.settings.ante) can++; }
+      if (can < 2) throw new GameError(`Raund üçün balansı oyun haqqına (${room.settings.ante} xal) çatan ən azı 2 oyunçu lazımdır. Balansı çatmayan oyunçu "Kredit istə" və ya Demo seçə bilər.`);
+    }
+    const c = { id: (room.consentSeq = (room.consentSeq || 0) + 1), hostId: userId, deadline: Date.now() + this.consentMs, ask, yes: new Set([userId]), no: new Set() };
+    room.consent = c;
+    c.timer = setTimeout(() => { this.runQ(room, () => this._finishConsent(room, c)).catch(() => {}); }, this.consentMs);
+    c.timer.unref?.();
+    this.say(room, `${room.members.get(userId)?.name ?? 'Otaq sahibi'} yeni raund təklif edir — razılıq gözlənilir (${Math.round(this.consentMs / 1000)} san).`);
+    this.broadcast(room);
+  }
+
+  /** Oyunçunun cavabı: yes=true razıdır, false — bu raundu buraxır. Cavab bir dəfə qəbul olunur. */
+  consentAnswer(userId, yes) {
+    const room = this.roomOf(userId);
+    const c = room.consent;
+    if (!c || !c.ask.includes(userId)) throw new GameError('Sizdən razılıq gözlənilmir.');
+    if (c.yes.has(userId) || c.no.has(userId)) return;
+    (yes === true ? c.yes : c.no).add(userId);
+    if (this.consentDone(room, c)) return this.runQ(room, () => this._finishConsent(room, c));
+    this.broadcast(room);
+  }
+
+  consentDone(room, c) { return c.ask.every((id) => c.yes.has(id) || c.no.has(id) || !room.members.has(id)); }
+
+  async _finishConsent(room, c) {
+    if (room.consent !== c) return;
+    clearTimeout(c.timer);
+    room.consent = null;
+    if (this.rooms.get(room.code) !== room) return;
+    if (room.hostId !== c.hostId || !room.members.has(c.hostId)) { this.say(room, 'Raund başlamadı: otaq sahibi dəyişdi.'); this.broadcast(room); return; }
+    const skipped = c.ask.filter((id) => room.members.has(id) && !c.yes.has(id));
+    for (const id of skipped) this.say(room, `${room.members.get(id).name} ${c.no.has(id) ? 'bu raundu buraxdı' : 'vaxtında cavab vermədi — bu raundda iştirak etmir'}.`);
+    try {
+      await this._startRound(room, c.hostId, new Set(c.yes));
+    } catch (e) {
+      if (!(e instanceof GameError)) throw e;
+      this.say(room, `Raund başlamadı: ${e.message}`);
+      this.send(c.hostId, { t: 'error', msg: `Raund başlamadı: ${e.message}` });
+      this.broadcast(room);
+    }
+  }
+
+  async _startRound(room, userId, only = null) {
     if (this.rooms.get(room.code) !== room) throw new GameError('Otaq bağlanıb.');
     if (room.hostId !== userId) throw new GameError('Raundu yalnız otaq sahibi başlada bilər.');
     if (this.roundRunning(room)) throw new GameError('Raund artıq gedir.');
     this.mustNotBlocked(room);
+    if (this.bulkBusy && !this.isPractice(room)) throw new GameError('Admin balans əməliyyatı icra olunur — bir neçə saniyə sonra yenidən başladın.');
     for (const id of [...room.seats]) {
       const m = room.members.get(id);
       if (m && !m.isBot && !m.connected) this.leave(id);
@@ -467,6 +564,7 @@ export class RoomManager {
     for (const id of room.seats) {
       const m = room.members.get(id);
       if (!m) continue;
+      if (only && !m.isBot && !only.has(id)) continue; // razılıq verməyən bu raundda oynamır (xal tutulmur)
       if (m.isBot) {
         let b = room.practice.get(id) ?? PRACTICE_START;
         if (b < room.settings.ante * 5) b = PRACTICE_START; // botun virtual balansı bitəndə yenilənir
@@ -492,6 +590,7 @@ export class RoomManager {
     const k = room.dealerIdx % players.length;
     const ordered = [...players.slice(k), ...players.slice(0, k)];
     room.dealerIdx++;
+    room.roundSeq = (room.roundSeq || 0) + 1; // klient yeni raundu tanısın (xod məbləği minimumdan başlasın)
     room.round = new Round({ players: ordered, settings: room.settings, now: Date.now(), uid: practice ? null : crypto.randomUUID() });
     room.round.practice = practice;
     // "Borca oyna" yalnız real otaqda: bot yoxdur, demo deyil (iki aktiv insan şərtini mühərrik yoxlayır)
@@ -541,6 +640,7 @@ export class RoomManager {
   // Mühərrikin pul hərəkətlərini paketə yığ (sabit batchId ilə), bazaya yaz və hamıya göndər
   async applyEffects(room, { silent = false } = {}) {
     room.lastActive = Date.now();
+    this.drainGameChat(room);
     this.collect(room);
     await this.flush(room);
     if (!silent) { this.broadcast(room); this.scheduleBots(room); }
@@ -569,6 +669,7 @@ export class RoomManager {
         flows: r.result.flows,
         // borca oyundan yaranan borclar raundun son paketi ilə EYNİ tranzaksiyada yazılır
         loans: (r.result.creditLoans || []).map((l) => ({ ...l, note: `Borca oyun — otaq ${room.code} / raund ${String(r.uid).slice(0, 8)}` })),
+        results: r.result.how === 'aborted' ? [] : roundResults(r),
       } : null,
     });
   }
@@ -662,6 +763,12 @@ export class RoomManager {
     else this.broadcast(room);
   }
 
+  // hər hansı real (məşq olmayan) otaqda gedən raund və ya yazılmamış paket varmı (toplu balans əməliyyatından əvvəl)
+  anyActiveRealRound() {
+    for (const room of this.rooms.values()) if (!this.isPractice(room) && (this.roundRunning(room) || this.isBlocked(room))) return true;
+    return false;
+  }
+
   // istifadəçi real raundda iştirak edirmi (mənfi balans sıfırlama üçün)
   inActiveRealRound(userId) {
     for (const room of this.rooms.values()) {
@@ -751,6 +858,13 @@ export class RoomManager {
         };
       }),
       round: r ? r.viewFor(uid, now) : null,
+      roundSeq: room.roundSeq || 0,
+      // yeni raund üçün razılıq: kimdən soruşulub, kim razıdır/imtina edib; "mine" — mənim cavabım
+      consent: room.consent ? {
+        id: room.consent.id, hostId: room.consent.hostId, deadline: room.consent.deadline,
+        ask: room.consent.ask.filter((id) => room.members.has(id)), yes: [...room.consent.yes], no: [...room.consent.no],
+        mine: !room.consent.ask.includes(uid) ? (uid === room.consent.hostId ? 'yes' : null) : room.consent.yes.has(uid) ? 'yes' : room.consent.no.has(uid) ? 'no' : 'wait',
+      } : null,
       chat: room.chatLog || [],
       // çat tarixçəsi: yalnız otaq üzvlərinə və yalnız onun otağa qoşulduğu andan sonrakı mesajlar
       chatMsgs: (room.chatMsgs || []).filter((c) => c.t >= (room.members.get(uid)?.joinedAt ?? Infinity)).slice(-CHAT_KEEP),

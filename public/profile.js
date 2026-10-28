@@ -1,6 +1,7 @@
 // "Profilim": balans, kredit, borclar, hədiyyə, şəkil, tarixçə, qarşılıqlı nəticələr, bildirişlər
 import { azDative, azAblative } from './core.js';
 import { S, esc, fmt, fmtCents, money, api, toast, moneyCall, avatarHTML, txList, fmtDate, bakuInputToMs, msToBakuInput, LOAN_STATUS, azLower } from './core.js';
+import { itemIconHTML } from './items.js';
 
 export const STATS_NOTE = 'Yalnız faktiki oyun nəticələri: hər real raundda oyunçunun banka qoyduğu pul qaliblərə onların bankdan aldığı paya mütənasib bölünür; qalibin öz payı özünə yazılmır. Kredit, borc, hədiyyə, bonus, admin düzəlişləri, demo/botlu raundlar daxil deyil. Qeydlər v2 yeniləməsindən sonrakı raundlardan başlayır.';
 const AUTO_CLAUSE = 'Son ödəmə vaxtı çatanda qalan borc borc alanın əsas balansından <b>avtomatik tutulur</b>. Balans çatmasa yalnız mövcud məbləğ tutulur, qalan hissə "Gecikib" statusunda qalır və sonradan balansa daxil olan vəsaitdən avtomatik tutulur. Faiz və cərimə yoxdur. Balans mənfiyə düşmür.';
@@ -33,6 +34,59 @@ function loanRow(l, me, side) {
         <button class="btn small primary">Borcu ödə</button></form>` : ''}
     </div>
     <div class="d ${side === 'borrower' ? 'minus' : 'plus'}">${fmt(l.remaining)}</div>
+  </div>`;
+}
+
+// ---------- dərəcə (balansdan ayrı, tamamlanmış oyunlar) ----------
+const RANK_STEPS = [['Yeni oyunçu', 0], ['Həvəskar', 5], ['Təcrübəli', 20], ['Peşəkar', 50], ['Ekspert', 100], ['Usta', 200], ['Çempion', 400], ['Əfsanə', 700]];
+function rankHTML(r) {
+  if (!r) return '';
+  const nx = r.rank.next;
+  const prevWins = RANK_STEPS[r.rank.level - 1][1];
+  const pct = nx ? Math.min(100, Math.round(((r.countedWins - prevWins) / (nx.wins - prevWins)) * 100)) : 100;
+  return `<div class="card-panel rank-card" data-key="rank">
+    <h2>🏅 Dərəcə: ${esc(r.rank.name)} <span class="muted" style="font-size:13px">(${r.rank.level}/8)</span></h2>
+    <div class="stat-grid">
+      <div class="stat"><small>Qələbə</small><b class="pos-t">${r.wins}</b></div>
+      <div class="stat"><small>Məğlubiyyət</small><b class="neg-t">${r.losses}</b></div>
+      <div class="stat"><small>Bölünmə</small><b>${r.splits}</b></div>
+      <div class="stat"><small>Dərəcəyə sayılan qələbə</small><b>${r.countedWins}</b></div>
+    </div>
+    ${nx ? `<div class="rank-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+      <div class="muted" style="font-size:12.5px">Növbəti dərəcə — <b>${esc(nx.name)}</b>: daha ${nx.left} sayılan qələbə (cəmi ${nx.wins}).</div>` : '<div class="muted">Ən yüksək dərəcə!</div>'}
+    <details class="mt"><summary class="muted" style="font-size:12.5px">Dərəcə necə hesablanır?</summary>
+      <p class="muted" style="font-size:12.5px">Yalnız tamamlanmış real raundlar (botsuz, demo deyil). Qələbə — bankdan qoyduğunuzdan çox aldınız; bölünmə — bankı bölüşdünüz; məğlubiyyət — xalis itki. Raundda kimsə oyun haqqından əlavə xod/baxış etməlidir (hamı dərhal pas desə sayılmır). Eyni oyunçu tərkibi ilə 24 saatda ən çox 10 raund dərəcəyə sayılır. Balans sıfırlansa da dərəcə dəyişmir.</p>
+      <p class="muted" style="font-size:12.5px">${RANK_STEPS.map(([n, w]) => `${esc(n)} — ${w}`).join(' · ')}</p></details>
+  </div>`;
+}
+
+// ---------- hesab ayarları: ad, telefon, şifrə (mövcud şifrə ilə) ----------
+// Kolleksiyam: alınmış virtual əşyalar (hesaba bağlıdır — yenidən girişdə itmir). İstifadə yalnız dekorativdir.
+function collectionHTML(list = []) {
+  return `<div class="card-panel coll-card" data-key="collection">
+    <div class="row" style="align-items:center"><h2 style="margin:0">🎒 Kolleksiyam</h2>
+      <button class="btn small primary" style="flex:0 0 auto" data-a="openShop" data-v="items">🛒 Market</button></div>
+    ${list.length ? `<div class="coll-row">${list.map((c) => `<button type="button" class="coll-item" data-a="shopUse" data-id="${esc(c.id)}" title="İstifadə et — ${esc(c.name)}">
+        ${itemIconHTML(c)}<span>${esc(c.name)}</span></button>`).join('')}</div>
+      <p class="muted" style="font-size:12px">Əşyaya toxunun — ikonu profil şəklinizin yanında 2–3 saniyə görünəcək. Oyuna heç bir təsiri yoxdur.</p>`
+    : '<p class="muted" style="font-size:12.5px">Hələ əşyanız yoxdur. Marketdə virtual oyun xalı ilə əşya ala bilərsiniz (real pul yoxdur).</p>'}
+  </div>`;
+}
+
+function accountHTML(u) {
+  return `<div class="card-panel" data-key="account">
+    <h2>⚙️ Hesab ayarları</h2>
+    <div class="row set-shop"><span>🛒 Market və kolleksiya (virtual xal)</span><button type="button" class="btn small" style="flex:0 0 auto" data-a="openShop" data-v="mine">Aç</button></div>
+    <form data-form="account" data-keep-dirty autocomplete="off">
+      <label>Görünən ad</label><input name="displayName" maxlength="20" value="${esc(u.displayName)}" autocomplete="nickname">
+      <label>Telefon ${u.phone ? `<span class="muted" style="font-size:12px">— ${u.phoneVerified ? '✅ təsdiqlənib' : 'təsdiqlənməyib'}</span>` : ''}</label>
+      <input name="phone" type="tel" inputmode="tel" placeholder="+994501234567" value="${esc(u.phone || '')}" autocomplete="tel">
+      <p class="muted" style="font-size:12px">SMS xidməti hələ qoşulmayıb: nömrə yadda saxlanılır, amma təsdiq kodu göndərilmir və nömrə "təsdiqlənməyib" kimi qalır.</p>
+      <label>Yeni şifrə (dəyişmək istəmirsinizsə boş saxlayın)</label><input name="newPassword" type="password" autocomplete="new-password" minlength="6">
+      <label>Yeni şifrə — təkrar</label><input name="newPassword2" type="password" autocomplete="new-password" minlength="6">
+      <label>Mövcud şifrə <b>(hər dəyişiklik üçün tələb olunur)</b></label><input name="currentPassword" type="password" autocomplete="current-password" required>
+      <button class="btn primary block mt">Yadda saxla</button>
+    </form>
   </div>`;
 }
 
@@ -76,6 +130,9 @@ export function renderProfile(topbar) {
       <div class="stat"><small>Alacaqlarım</small><b class="pos-t">${fmt(sum(owedMe))}</b></div>
     </div>
     <p class="muted" style="font-size:12px">Bütün məbləğlər virtual oyun xalıdır; real pul deyil. Kredit və şəxsi borclar ayrı göstərilir.</p>
+${rankHTML(p.rank)}
+${collectionHTML(p.collection)}
+${accountHTML(u)}
 
     ${overdue.length ? `<div class="card-panel warn"><h2>⚠️ Gecikmiş borclar</h2>${overdue.map((l) => loanRow(l, u, 'borrower')).join('')}
       <p class="muted" style="font-size:12px">Balansınıza daxil olan vəsaitdən avtomatik tutulacaq.</p></div>` : ''}
@@ -225,6 +282,16 @@ export function pickRecipient(el) {
 // -------- formalar (app.js submit idarəsindən çağırılır) --------
 export function profileForms(render, reload) {
   return {
+    account: async (data, form) => {
+      if (data.newPassword && data.newPassword !== data.newPassword2) return toast('Yeni şifrələr eyni deyil.');
+      if (data.newPassword && data.newPassword.length < 6) return toast('Yeni şifrə ən azı 6 simvol olmalıdır.');
+      const r = await api('/api/me/account', { currentPassword: data.currentPassword, displayName: data.displayName, phone: data.phone, newPassword: data.newPassword || '', newPassword2: data.newPassword2 || '' });
+      S.user = { ...S.user, ...r.user };
+      form.reset();
+      for (const n of ['currentPassword', 'newPassword', 'newPassword2']) if (form[n]) form[n].value = '';
+      toast(`Yadda saxlanıldı: ${r.changed.join(', ')}.${r.changed.includes('şifrə') ? ' Digər cihazlardakı sessiyalar bağlandı.' : ''}${r.changed.includes('telefon') ? ' Telefon təsdiqlənməyib (SMS xidməti yoxdur).' : ''}`, true);
+      reload();
+    },
     gift: (data) => {
       const to = S.recipient?.gift;
       const amount = Number(data.amount);

@@ -1,5 +1,51 @@
 # Dəyişikliklər
 
+## v3.2.0 — Seka seçimi (bankı saxla / böl və 2× Seka), "Nəyəsə gəlir?", baxış nəticəsi raund sonunda, masada borc istəyi bildirişi
+
+- **Seka:** "🏦 Bankı saxla" (bank tam keçir, qoşulma = bankdakı məbləğ) və ya "💰 Pulu böl və 2× Seka oyna" (bank yarıya, sonra hər iştirakçı 2× oyun haqqı). Razılaşmasalar — xalı çox olan, bərabərdirsə təklifi alan seçir. Qərar vaxtı 30 san; heç kim seçməsə "Bankı saxla".
+- **"Nəyəsə gəlir?"** — köhnə "Seka təklif et" / "½ Bankı bölək" düymələrinin yerinə bir təklif; çatda hamıya görünür; qarşı tərəf: ½ bölək / Seka / Heç nəyə gəlmirəm, davam elə.
+- **Baxış nəticəsi:** v3.1-də baxış xalı dərhal hamıya göstərilirdi — istəyə uyğun dəyişdirildi: xallar serverdə saxlanılır, raund gedərkən gizlidir, raund bitəndə nəticədə ("Yaqubun baxış vaxtı xalı 20 idi"). Bərabər xal qərarında xal yalnız iki tərəfə göndərilir.
+- **Masada borc istəyi:** borc verənə kiçik bildiriş (kim, kimdən, nə qədər), Qəbul et / Rədd et, 10 san; cavabsız avtomatik ləğv (server taymeri, dövri baza sorğusu yoxdur), nəticə istəyənə dərhal. Migration 10: `loans.respond_by`.
+- **Botlar** yeni seçimləri edir. Köhnə API hərəkətləri (`offerSeka`, `offerSplit`) işləyir.
+- **Testlər:** `test/v32-engine.test.js`, `test/v32-integration.test.js`, `test/v32-loanask.test.js`; köhnə seka testləri yeni qaydaya uyğunlaşdırıldı; `tools/ui-v31b.cjs` (baxış nəticəsi, "Nəyəsə gəlir?", Seka seçimi), `tools/ui-v32-loan.cjs` (borc bildirişi).
+
+## v3.1.0 — oyundaxili market (yalnız virtual xal), yeni raunda razılıq, baxışma xalı hamıya
+
+- **Market:** 🎁 düyməsi → "Hədiyyə göndər / Market / Kolleksiyam"; profildə "🎒 Kolleksiyam" və "Hesab ayarları"nda "🛒 Market". İlkin əşyalar: Siqaret, Viski, Enerji içkisi (brendsiz), Yemək, Dönər — orijinal SVG ikonlar.
+- **Alış:** qiymət və balans serverdə yoxlanılır (klientin göndərdiyi qiymətə baxılmır), xal serverdə şərti `UPDATE` ilə çıxılır, eyni açarla təkrar/paralel sorğu xalı bir dəfə tutur (`op_keys`), əşya kolleksiyada bir dəfə olur, jurnalda "Market (virtual əşya)". Aktiv raund gedərkən alış otaq növbəsi ilə — oyunun yaddaş balansı da yenilənir.
+- **Kolleksiya hesaba bağlıdır** (`user_items`), yenidən girişdə itmir. "İstifadə et" → ikon profil şəklinin yanında ~2,6 san; otaqdakılar da görür, başqa otaqlara getmir; `#fx` qatı toxunuşları buraxır; oyuna heç bir təsiri yoxdur. 3 saniyədə bir.
+- **Admin → Market:** ad, qiymət, satışda/deyil, şəkil yüklə (JPG/PNG/WebP, serverdə 256×256 WebP, şəffaflıq qalır, metadata silinir) / standart ikona qaytar, satış sayı. Yalnız admin. Yeni qiymət yalnız sonrakı alışlara.
+- **Real pul ödənişi, real məhsul sifarişi, pul çıxarışı YOXDUR.**
+- **Yeni raunda razılıq:** otaq sahibi "Başla" basanda masadakı digər oyunçulardan "Razıyam / Bu raundu burax" soruşulur (15 san, bir dəfə vibrasiya + bildiriş). İmtina edən və cavab verməyən həmin raundu buraxır, ondan oyun haqqı tutulmur; azı 2 razı oyunçu lazımdır. Yalnız sahib + botlar olanda soruşulmur.
+- **Baxışma xalı hamıya (v3.2-də dəyişdirildi — raund sonunda göstərilir):** baxışan iki oyunçunun xalı (kartlar yox) masadakı hər kəsə göstərilir (👁 nişanı və jurnal: "Yaqub (19 xal) qalib gəldi, Anar (17 xal) çıxdı"), çünki iki tərəf onsuz da bilir və çatda/səslə deyə bilərdi.
+- **Migration 9:** `shop_items`, `user_items`, `shop_purchases` (yalnız əlavə, məlumat silinmir).
+- **Testlər:** `test/v31-shop.test.js`, `test/v31-consent.test.js`, `test/v28-engine.test.js` (baxışma xalı), `test/turnalert.test.js` (razılıq bildirişi), `tools/ui-v31.cjs`, `tools/ui-v31b.cjs`.
+
+## v3.0.0 — səsli danışıq düzəlişi (tam mesh), lokal susdurma, iPhone, xal, profil, dərəcələr, admin toplu balans, Masa kralı, növbə vibrasiyası
+
+- **Səs:** göndərilən ZIP GPT-nin ilk variantı idi (v2.9 düzəlişləri yox idi). Səbəb: otağa sonra girənlər səsdəki digər oyunçuları bilmirdi → bağlantı yalnız otaq sahibi ilə qurulurdu. v2.9 düzəlişləri + yeni: hər oyunçu üçün "yalnız məndə" 🔊/🔇, danışan/susdurulmuş/qoşulur/xəta vəziyyətləri, gözlənilməz təklif zamanı köhnə bağlantının bağlanması (paralel bağlantı yoxdur), köhnəlmiş cavabın atılması, aydın xəta mesajları, iOS səs bərpası. `tools/ui-voice4.cjs` — 4 oyunçu tam mesh.
+- **iPhone:** üfüqi sürüşmənin qarşısı, mətn böyütmə, 16px sahələr (iOS fokus böyütməsi), landşaftda safe-area, 320 px üst panel.
+- **Kart xalı:** kart açılan kimi dərhal (serverlə eyni qayda), "? xal" ilişmir.
+- **Yeni raund:** xod məbləği otağın minimumundan başlayır (`roundSeq`).
+- **Profil:** ad/telefon/şifrə mövcud şifrə ilə (`POST /api/me/account`), şifrə iki dəfə, digər sessiyalar bağlanır; telefon "təsdiqlənməyib" (SMS yoxdur).
+- **Dərəcələr:** `round_results` (Migration 8, köhnə raundlar təxmini), 8 dərəcə, saxta oyunlara qarşı qaydalar.
+- **Admin:** toplu sıfırlama / hamısına xal — ön baxış, ikinci təsdiq, atomik, idempotent, `admin_log`.
+- **Masa kralı:** kartlar → işıq izləri → tac → avatar → xallar.
+- **Növbə:** bir dəfə vibrasiya (dəstəklənirsə) + ekran bildirişi, ayarlardan söndürülür.
+- **Testlər:** `test/v30.test.js`, `test/turnalert.test.js`, `tools/ui-v30.cjs`, `tools/ui-voice4.cjs`.
+
+## v2.9.0 — səsli danışıq (WebRTC, sınaq versiyası)
+
+- ChatGPT-nin hazırladığı ilk variant əsas götürülüb, real WebRTC sınağında tapılan xətalar düzəldilib:
+  - otağa sonradan girən və İD-si kiçik olan oyunçu heç kimə qoşulmurdu → server otaqdakı səs iştirakçılarını girəndə və səsi açanda göndərir;
+  - WebSocket qırılıb bərpa olunanda səs kəsilirdi, geri qayıtmırdı → klient yenidən elan edir, bağlantılar təzədən qurulur;
+  - ICE namizədi təsvirdən əvvəl emal olunanda bağlantı bağlanırdı → hər qarşı tərəf üçün ardıcıl növbə və namizəd buferi;
+  - səssiz statusu başqalarına görünmürdü → 🔇 nişanı;
+  - otaqdan kənar/otaq dəyişəndə server statusu təmizlənmirdi; böyük siqnal ölçüsü məhdudlaşdırıldı.
+- TURN: Cloudflare Realtime TURN (`CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`) və ya coturn shared-secret (`TURN_URLS`, `TURN_SHARED_SECRET`).
+- Demo otaqda mikrofon düyməsi yoxdur; 320 px ekranda üst panel sığır.
+- Testlər: `test/voice.test.js` (server), `tools/ui-voice.cjs` (Chromium, real WebRTC, saxta mikrofon).
+
 ## v2.8.0 — xal/balans məxfiliyi, masadan borc, mobil masa, çat tarixçəsi, sekadan keçən bank, onlayn status, "Şir", donmaya qarşı
 
 - **Kart xalı yalnız baxandan sonra:** yeni `look` hərəkəti (versiyanı dəyişmir, başqalarına heç nə göndərmir); server `me.score`-u yalnız baxandan sonra (və raund bitəndə) göndərir. Botlar avtomatik "baxır".

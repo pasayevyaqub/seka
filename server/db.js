@@ -204,6 +204,104 @@ const MIGRATIONS = [
       await q.run(`INSERT INTO gift_types(id, name, price, active, sort) VALUES ('lion', 'Şir', 500, 1, 4) ON CONFLICT(id) DO NOTHING`);
     },
   },
+  {
+    id: 8,
+    name: 'v3.0: oyunçu dərəcələri (raund nəticələri), admin əməliyyat qeydiyyatı, telefon təsdiqi sahəsi — məlumat silinmir',
+    async up(q, kind) {
+      const serial = kind === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+      // hər tamamlanmış real raundda hər insan iştirakçının nəticəsi (dərəcə balansdan AYRI hesablanır)
+      await q.run(`CREATE TABLE IF NOT EXISTS round_results (
+        round_uid TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        outcome TEXT NOT NULL,
+        net BIGINT NOT NULL DEFAULT 0,
+        group_key TEXT NOT NULL,
+        counted INTEGER NOT NULL DEFAULT 1,
+        created_at BIGINT NOT NULL,
+        PRIMARY KEY (round_uid, user_id))`);
+      await q.run('CREATE INDEX IF NOT EXISTS round_results_user ON round_results(user_id, counted, outcome)');
+      await q.run('CREATE INDEX IF NOT EXISTS round_results_group ON round_results(user_id, group_key, created_at)');
+      await q.run(`CREATE TABLE IF NOT EXISTS admin_log (
+        id ${serial},
+        admin_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        amount BIGINT,
+        affected INTEGER NOT NULL DEFAULT 0,
+        details TEXT,
+        created_at BIGINT NOT NULL)`);
+      await addColumn(q, kind, 'users', 'phone_verified', 'INTEGER NOT NULL DEFAULT 0');
+      // köhnə tamamlanmış raundlar: nəticə round_flows-dan təxmini çıxarılır (qalib: xalis +, uduzan: xalis −)
+      const rounds = await q.all(`SELECT uid, contrib, finished_at, created_at FROM rounds WHERE status = 'finished' ORDER BY COALESCE(finished_at, created_at), uid`);
+      const counter = new Map(); // gündəlik limit üçün: user|group|gün → say
+      for (const r of rounds) {
+        let contrib = {};
+        try { contrib = JSON.parse(r.contrib || '{}'); } catch { /* */ }
+        const ids = Object.keys(contrib).map(Number).filter((x) => x > 0);
+        if (ids.length < 2) continue;
+        const flows = await q.all('SELECT from_user, to_user, cents FROM round_flows WHERE round_uid = $1', [r.uid]);
+        const net = new Map(ids.map((id) => [id, 0]));
+        for (const f of flows) { net.set(Number(f.to_user), (net.get(Number(f.to_user)) || 0) + Number(f.cents)); net.set(Number(f.from_user), (net.get(Number(f.from_user)) || 0) - Number(f.cents)); }
+        const group = [...ids].sort((x, y) => x - y).join('-');
+        const t = Number(r.finished_at || r.created_at);
+        const day = Math.floor(t / 86_400_000);
+        for (const id of ids) {
+          const n = net.get(id) || 0;
+          const outcome = n > 0 ? 'win' : n < 0 ? 'loss' : 'split';
+          const k = `${id}|${group}|${day}`;
+          const c = (counter.get(k) || 0) + 1; counter.set(k, c);
+          const counted = flows.length > 0 && c <= 10 ? 1 : 0;
+          await q.run(`INSERT INTO round_results(round_uid, user_id, outcome, net, group_key, counted, created_at) VALUES($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT(round_uid, user_id) DO NOTHING`, [r.uid, id, outcome, Math.round(n / 100), group, counted, t]);
+        }
+      }
+    },
+  },
+  {
+    id: 9,
+    name: 'v3.1: oyundaxili market (yalnız virtual xal) və oyunçu kolleksiyası — məlumat silinmir',
+    async up(q, kind) {
+      const serial = kind === 'pg' ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+      const blob = kind === 'pg' ? 'BYTEA' : 'BLOB';
+      await q.run(`CREATE TABLE IF NOT EXISTS shop_items (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        price BIGINT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        sort INTEGER NOT NULL DEFAULT 0,
+        image ${blob},
+        image_ver INTEGER NOT NULL DEFAULT 0)`);
+      await q.run(`INSERT INTO shop_items(id, name, price, active, sort) VALUES
+        ('cigarette', 'Siqaret', 50, 1, 1),
+        ('whisky', 'Viski', 150, 1, 2),
+        ('energy', 'Enerji içkisi', 80, 1, 3),
+        ('food', 'Yemək', 60, 1, 4),
+        ('doner', 'Dönər', 70, 1, 5) ON CONFLICT(id) DO NOTHING`);
+      // kolleksiya: oyunçunun aldığı əşyalar (hesaba bağlı — yenidən girəndə itmir)
+      await q.run(`CREATE TABLE IF NOT EXISTS user_items (
+        user_id INTEGER NOT NULL,
+        item_id TEXT NOT NULL,
+        acquired_at BIGINT NOT NULL,
+        price_paid BIGINT NOT NULL,
+        uses INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, item_id))`);
+      await q.run(`CREATE TABLE IF NOT EXISTS shop_purchases (
+        id ${serial},
+        user_id INTEGER NOT NULL,
+        item_id TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        price BIGINT NOT NULL,
+        op_key TEXT,
+        created_at BIGINT NOT NULL)`);
+      await q.run('CREATE INDEX IF NOT EXISTS shop_purchases_user ON shop_purchases(user_id, id)');
+    },
+  },
+  {
+    id: 10,
+    name: 'v3.2: masadan borc istəyinə cavab müddəti (10 san) — məlumat silinmir',
+    async up(q, kind) {
+      await addColumn(q, kind, 'loans', 'respond_by', 'BIGINT');
+    },
+  },
 ];
 
 // PostgreSQL üçün vaxt limitləri: baza cavab verməsə otaq növbəsi sonsuz gözləməsin (donmanın əsas ehtimalı)

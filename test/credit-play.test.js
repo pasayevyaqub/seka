@@ -4,6 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Round, TIMING } from '../server/game/engine.js';
 
+// v3.2: Sekaya keçəndə əvvəl "Bankı saxla / Pulu böl və 2× Seka" seçimi — köhnə testlər "Bankı saxla" ilə davam edir
+const keep = (rr, choice = 'keep') => { if (rr.phase === 'sekaChoice') { const p = rr.pending; const t = p.deadline - TIMING.DECISION_MS; rr.act(p.a, { type: 'sekaChoice', choice }, t); rr.act(p.b, { type: 'sekaChoice', choice }, t); } };
+
+
 const c = (str) => ({ r: str.slice(0, -1), s: str.slice(-1) });
 const h = (str) => str.split(' ').map(c);
 const WEAK = '6S 7C 9D';   // 9 xal
@@ -151,7 +155,7 @@ test('bankın bölünməsi: şərti qoyuluş real bankın nisbəti ilə bağlan�
   r.act(1, { type: 'xod', amount: 101 }, 0);
   r.act(2, { type: 'xod', amount: 101 }, 0);
   r.act(1, { type: 'offerSplit' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.result.how, 'split');
   assert.equal(r.result.payouts[1] + r.result.payouts[2], 121);
   assert.deepEqual(r.result.creditLoans, [{ borrower: 1, lender: 2, amount: 50, dueDays: 7 }]); // 101 × 60/121 → 50 (aşağı)
@@ -165,7 +169,7 @@ test('seka: şərti qoyuluşlar sekadan əvvəl bağlanır, növbəti əlinə gi
   r.act(1, { type: 'xod', amount: 100 }, 0);
   r.act(2, { type: 'xod', amount: 100 }, 0);
   r.act(1, { type: 'offerSeka' }, 0);
-  r.act(2, { type: 'offerAccept' }, 0);
+  r.act(2, { type: 'offerAccept' }, 0); keep(r);
   assert.equal(r.phase, 'sekaJoin');
   assert.equal(r.creditPot, 0);
   assert.equal(r.creditDeal, null);

@@ -6,11 +6,15 @@ import { onRoom as fxOnRoom, afterRender as fxAfterRender } from './fx.js';
 import { toggleMute, soundTest } from './sound.js';
 import { onGiftEvent, toggleAnimations, clearGiftQueue, preloadLion } from './giftfx.js';
 import { giftHandlers } from './gifts.js';
+import { shopHandlers, refreshShopModal } from './shop.js';
+import { onItemUse } from './items.js';
+import { onLoanAsk, onLoanAskDone, loanAskHandlers, initLoanAsk } from './loanask.js';
 import { installPeek, afterRenderPeek } from './peek.js';
 import { morph } from './morph.js';
 import { renderProfile, loadProfile, profileForms, profileHandlers, onSearchInput, pickRecipient, uploadAvatar, creditModal, STATS_NOTE } from './profile.js';
-import { renderAdmin, loadAdmin, refreshAdminList, adminForms, adminHandlers, adminModalSubmit } from './admin.js';
-import { initVoice, toggleVoice, onVoiceSignal, onVoiceState, stopVoice } from './voice.js';
+import { renderAdmin, loadAdmin, refreshAdminList, adminForms, adminHandlers, adminModalSubmit, uploadShopImage } from './admin.js';
+import { onRoomUpdate as turnAlert, toggleVibrate } from './turnalert.js';
+import { initVoice, toggleVoice, onVoiceSignal, onVoiceState, stopVoice, toggleLocalMute, onReconnect as voiceReconnect } from './voice.js';
 
 const $app = document.getElementById('app');
 const SETTINGS_FIELDS = [
@@ -32,6 +36,7 @@ function connect() {
     const was = S.conn;
     S.conn = 'online';
     if (was && was !== 'online') { toast('Bağlantı bərpa olundu.', true); render(); }
+    if (was) voiceReconnect();
     loadPendingLoans();
   };
   ws.onmessage = (ev) => {
@@ -49,6 +54,7 @@ function connect() {
       render();
     } else if (m.t === 'room') {
       try { fxOnRoom(S.room, m.room); } catch { /* animasiya oyunu dayandırmamalıdır */ }
+      try { turnAlert(S.room, m.room, showTurnBanner, S.user?.id); } catch { /* */ }
       S.room = m.room;
       if (!m.room.practice) preloadLion(); // "Şir" şəkli əvvəlcədən yüklənsin (bir dəfə)
       S.busy = false;
@@ -56,7 +62,7 @@ function connect() {
       if (S.view !== 'admin' && S.view !== 'profile') S.view = 'room';
       if (S.view === 'room') render();
     } else if (m.t === 'left') {
-      stopVoice(false);
+      stopVoice(true, true); // otaqdan çıxdı: səs bağlanır, serverə bildirilir
       S.room = null; S.bet = null; S.pick = null;
       if (S.view === 'room') S.view = 'lobby';
       exitFullscreen();
@@ -67,16 +73,25 @@ function connect() {
       const el = document.getElementById('myBalance');
       if (el) el.innerHTML = el.closest('.rb-bal') ? fmt(m.balance) : money(m.balance);
       if (S.view === 'profile') loadProfile(render);
+      refreshShopModal(render);
     } else if (m.t === 'tgift') {
       onGiftEvent(m);
+    } else if (m.t === 'itemUse') {
+      try { onItemUse(m); } catch { /* effekt oyunu dayandırmamalıdır */ }
     } else if (m.t === 'voiceSignal') {
       onVoiceSignal(m);
     } else if (m.t === 'voiceState') {
       onVoiceState(m);
     } else if (m.t === 'bubble') {
       showBubble(m);
+    } else if (m.t === 'loanAsk') {
+      try { onLoanAsk(m); } catch { /* */ }
+      loadPendingLoans();
+    } else if (m.t === 'loanAskDone') {
+      onLoanAskDone(m);
+      loadPendingLoans();
     } else if (m.t === 'notify') {
-      toast(m.text, true);
+      if (m.kind !== 'loan_ask') toast(m.text, true); // masa bildiriş kartı ayrıca göstərilir
       S.unread++;
       updateBell();
       if (m.kind === 'loan') loadPendingLoans();
@@ -156,12 +171,23 @@ function loansModalState() {
       <h4>Göndərdikləriniz</h4>${out.map(row).join('') || '<p class="muted">Yoxdur.</p>'}` };
 }
 
+// görünən növbə bildirişi (2,5 san, toxunuşları bloklamır)
+function showTurnBanner(text) {
+  const el = document.createElement('div');
+  el.className = 'turn-banner'; el.setAttribute('role', 'alert');
+  el.textContent = `🔔 ${typeof text === 'string' ? text : 'Növbə sizdədir!'}`;
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('out'), 2200);
+  setTimeout(() => el.remove(), 2700);
+}
+
 const send = (msg) => {
   if (S.ws?.readyState === 1) { S.ws.send(JSON.stringify(msg)); return true; }
   toast('Serverlə əlaqə yoxdur, yenidən qoşulur...');
   return false;
 };
-initVoice({ send, getRoom: () => S.room, getUser: () => S.user, repaint: () => { if (S.view === 'room') render(); } });
+initVoice({ send, getUser: () => S.user, getRoom: () => S.room, notify: (t) => toast(t), repaint: () => { if (S.view === 'room') render(); } });
+initLoanAsk({ render: () => { if (S.view === 'room') render(); } });
 // hər hərəkət gördüyümüz vəziyyətin versiyası ilə göndərilir (təkrar/köhnə klik server tərəfindən rədd olunur)
 const act = (action) => {
   if (S.busy) return;
@@ -444,7 +470,7 @@ const byId = (el) => Number(el.dataset.id);
 
 const H = {
   authTab: (el) => { S.authTab = el.dataset.v; render(); },
-  logout: async () => { await api('/api/logout', {}).catch(() => {}); S.user = null; S.view = 'auth'; S.ws?.close(); render(); },
+  logout: async () => { stopVoice(true, true); await api('/api/logout', {}).catch(() => {}); S.user = null; S.view = 'auth'; S.ws?.close(); render(); },
   openAdmin: () => { S.view = 'admin'; render(); reloadAdmin(); },
   closeAdmin: () => { S.view = S.room ? 'room' : 'lobby'; render(); loadRooms(); },
   openProfile: () => { S.view = 'profile'; S.profile = null; render(); reloadProfile(); },
@@ -469,7 +495,12 @@ const H = {
   fsExit: () => { exitFullscreen(); render(); },
   leave: () => { if (confirm('Otaqdan çıxmaq istəyirsiniz? Raund gedirsə pas sayılacaq.')) send({ t: 'leaveRoom' }); },
   voiceToggle: () => toggleVoice(),
+  toggleVibrate: () => { const on = toggleVibrate(); toast(on ? 'Növbə vibrasiyası açıldı.' : 'Növbə vibrasiyası söndürüldü.', true); render(); },
+  voiceLeave: () => stopVoice(true),
+  voicePeerMute: (el) => toggleLocalMute(el.dataset.id),
   start: () => send({ t: 'startRound' }),
+  consentYes: (el) => { el.disabled = true; send({ t: 'consent', yes: true }); },
+  consentNo: (el) => { el.disabled = true; send({ t: 'consent', yes: false }); },
   settingsModal: () => roomSettingsModal(),
   addBot: () => { send({ t: 'addBot' }); setTimeout(() => S.modal?.kind === 'settings' && roomSettingsModal(), 300); },
   removeBot: (el) => { send({ t: 'removeBot', botId: byId(el) }); setTimeout(() => S.modal?.kind === 'settings' && roomSettingsModal(), 300); },
@@ -487,6 +518,9 @@ const H = {
   baxis: () => act({ type: 'baxis', tieOffer: !!S.tieOffer }),
   offerSeka: () => act({ type: 'offerSeka' }),
   offerSplit: () => act({ type: 'offerSplit' }),
+  offerAny: () => act({ type: 'offerAny' }),
+  offerReply: (el) => act({ type: 'offerReply', choice: el.dataset.v }),
+  sekaChoice: (el) => act({ type: 'sekaChoice', choice: el.dataset.v }),
   offerAccept: () => act({ type: 'offerAccept' }),
   offerDecline: () => act({ type: 'offerDecline' }),
   votePas: () => act({ type: 'votePas' }),
@@ -581,8 +615,9 @@ const H = {
   pickRecipient: (el) => pickRecipient(el),
   pwModal: () => {
     S.modal = { title: 'Şifrəni dəyiş', kind: 'password', fields: [
-      { name: 'oldPassword', label: 'Köhnə şifrə', type: 'password' },
-      { name: 'newPassword', label: 'Yeni şifrə (ən azı 6 simvol)', type: 'password' }] };
+      { name: 'oldPassword', label: 'Mövcud şifrə', type: 'password' },
+      { name: 'newPassword', label: 'Yeni şifrə (ən azı 6 simvol)', type: 'password' },
+      { name: 'newPassword2', label: 'Yeni şifrə — təkrar', type: 'password' }] };
     render();
   },
   myTx: async () => {
@@ -616,6 +651,8 @@ const H = {
   uTx: (el) => { S.admin.txUser = byId(el); S.adminTab = 'tx'; render(); reloadAdmin(); },
   ...profileHandlers(render, reloadProfile),
   ...giftHandlers(render),
+  ...shopHandlers(render, reloadProfile),
+  ...loanAskHandlers(() => loadPendingLoans()),
   ...adminHandlers(render, reloadAdmin),
 };
 
@@ -645,6 +682,7 @@ document.addEventListener('change', (ev) => {
   { const tgs = t.closest?.('#tgSettings'); if (tgs) tgs.dataset.dirty = '1'; }
   if (t.id === 'adminFilter') { S.admin.filter = t.value; S.admin.page = 1; refreshAdminList(); }
   if (t.type === 'file' && t.closest('form[data-form="avatar"]')) uploadAvatar(t.files[0], reloadProfile);
+  if (t.type === 'file' && t.closest('form[data-form="shopItem"]')) { uploadShopImage(t.closest('form').dataset.id, t.files[0], reloadAdmin); t.value = ''; }
 });
 document.addEventListener('toggle', (ev) => {
   if (ev.target.id === 'logDetails') S.logOpen = ev.target.open;
@@ -690,7 +728,7 @@ document.addEventListener('submit', async (ev) => {
       } else if (m.kind === 'askLoan') {
         const r = await moneyCall(`askLoan${m.lenderId}`, '/api/loans/request', { lenderId: m.lenderId, amount: Number(data.amount), dueAt: Date.now() + Number(data.days) * 86_400_000 });
         if (!r) return;
-        toast(`İstək ${r.lenderName} üçün göndərildi. Təsdiqləyəndə xal balansınıza keçəcək.`, true);
+        toast(r.respondBy ? `İstək ${r.lenderName} üçün göndərildi — 10 saniyə ərzində cavab verməlidir.` : `İstək ${r.lenderName} üçün göndərildi. Təsdiqləyəndə xal balansınıza keçəcək.`, true);
         loadPendingLoans();
       } else if (m.kind === 'settings') {
         const settings = {};
@@ -699,7 +737,11 @@ document.addEventListener('submit', async (ev) => {
         send({ t: 'settings', settings });
       } else if (m.kind === 'roomPassword') {
         send({ t: 'joinRoom', code: m.code, password: data.password });
-      } else if (m.kind === 'password') { await api('/api/password', data); toast('Şifrə dəyişdirildi.', true); }
+      } else if (m.kind === 'password') {
+        if (data.newPassword !== data.newPassword2) { toast('Yeni şifrələr eyni deyil.'); return; }
+        await api('/api/me/account', { currentPassword: data.oldPassword, newPassword: data.newPassword, newPassword2: data.newPassword2 });
+        toast('Şifrə dəyişdirildi. Digər cihazlardakı sessiyalar bağlandı.', true);
+      }
       else if (m.kind === 'creditRequest') {
         const r = await moneyCall('creditRequest', '/api/credit/request', { amount: Number(data.amount), note: data.note });
         if (!r) return;
